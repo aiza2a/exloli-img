@@ -21,16 +21,10 @@ pub struct Config {
     pub imgbb: ImgBBConfig,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct FreeimageConfig {
-    pub api_key: String,
-}
-
 #[derive(Debug, Deserialize, Clone)]
 pub struct ImgBBConfig {
     pub api_key: String,
 }
-
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ExHentai {
