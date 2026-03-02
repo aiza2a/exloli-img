@@ -9,18 +9,18 @@ use reqwest::{Client, StatusCode};
 use telegraph_rs::{html_to_node, Telegraph};
 use teloxide::prelude::*;
 use teloxide::types::MessageId;
-//use teloxide::utils::html::{code_inline, link};
 use tokio::task::JoinHandle;
 use tokio::time;
-use tracing::{debug, error, info};
+// 這裡正確引入了 Instrument，解決編譯報錯問題
+use tracing::{debug, error, info, Instrument};
 
 use crate::bot::Bot;
-use crate::catbox::CatboxUploader;
 use crate::config::Config;
 use crate::database::{
     GalleryEntity, ImageEntity, MessageEntity, PageEntity, PollEntity, TelegraphEntity,
 };
 use crate::ehentai::{EhClient, EhGallery, EhGalleryUrl, GalleryInfo};
+use crate::freeimage::FreeimageUploader;
 use crate::tags::EhTagTransDB;
 
 #[derive(Debug, Clone)]
@@ -53,17 +53,17 @@ impl ExloliUploader {
         })
     }
 
-    /// 每隔 interval 分钟检查一次
+    /// 每隔 interval 分鐘檢查一次
     pub async fn start(&self) {
         loop {
-            info!("开始扫描 E 站 本子");
+            info!("開始掃描 E 站本子");
             self.check().await;
-            info!("扫描完毕，等待 {:?} 后继续", self.config.interval);
+            info!("掃描完畢，等待 {:?} 後繼續", self.config.interval);
             time::sleep(self.config.interval).await;
         }
     }
 
-    /// 根据配置文件，扫描前 N 个本子，并进行上传或者更新
+    /// 根據設定檔，掃描前 N 個本子，並進行上傳或更新
     #[tracing::instrument(skip(self))]
     async fn check(&self) {
         let stream = self
@@ -72,7 +72,7 @@ impl ExloliUploader {
             .take(self.config.exhentai.search_count);
         tokio::pin!(stream);
         while let Some(next) = stream.next().await {
-            // 错误不要上抛，避免影响后续画廊
+            // 錯誤不要上拋，避免影響後續畫廊
             if let Err(err) = self.try_update(&next, true).await {
                 error!(
                     "check_and_update: {:?}\n{}",
@@ -91,9 +91,7 @@ impl ExloliUploader {
         }
     }
 
-    /// 检查指定画廊是否已经上传，如果没有则进行上传
-    ///
-    /// 为了避免绕晕自己，这次不考虑父子画廊，只要 id 不同就视为新画廊，只要是新画廊就进行上传
+    /// 檢查指定畫廊是否已經上傳，如果沒有則進行上傳
     #[tracing::instrument(skip(self))]
     pub async fn try_upload(&self, gallery_url_param: &EhGalleryUrl, check: bool) -> Result<()> {
         if check
@@ -106,19 +104,16 @@ impl ExloliUploader {
         }
 
         let gallery_data = self.ehentai.get_gallery(gallery_url_param).await?;
-        // 上传图片、发布文章
-        let catbox_album_url = self.upload_gallery_image(&gallery_data).await?;
+        
+        // 核心邏輯：直接上傳所有圖片到圖床
+        self.upload_gallery_image(&gallery_data).await?;
         let article = self.publish_telegraph_article(&gallery_data).await?;
-        // 发送消息
+        
+        // 建立 Telegram 訊息 (去除了冗餘的相冊 URL 參數)
         let text = self
-            .create_message_text(
-                &gallery_data,
-                &article.url,
-                catbox_album_url.as_deref(),
-            )
+            .create_message_text(&gallery_data, &article.url)
             .await?;
-        // FIXME: 此处没有考虑到父画廊没有上传，但是父父画廊上传过的情况
-        // 不过一般情况下画廊应该不会那么短时间内更新多次
+
         let msg = if let Some(parent) = &gallery_data.parent {
             if let Some(pmsg) = MessageEntity::get_by_gallery(parent.id()).await? {
                 self.bot
@@ -135,19 +130,16 @@ impl ExloliUploader {
                 .send_message(self.config.telegram.channel_id.clone(), text)
                 .await?
         };
-        // 数据入库
+        
+        // 資料入庫
         MessageEntity::create(msg.id.0, gallery_data.url.id()).await?;
         TelegraphEntity::create(gallery_data.url.id(), &article.url).await?;
         GalleryEntity::create(&gallery_data).await?;
-        // 可选：将 catbox_album_url 保存到数据库，例如一个新的表或者扩展 TelegraphEntity
-        // if let Some(album_url) = catbox_album_url {
-        //     // CatboxAlbumEntity::create(gallery_data.url.id(), &album_url).await?;
-        // }
 
         Ok(())
     }
 
-    /// 检查指定画廊是否有更新，比如标题、标签
+    /// 檢查指定畫廊是否有更新（標題或標籤變動）
     #[tracing::instrument(skip(self))]
     pub async fn try_update(&self, gallery_url_param: &EhGalleryUrl, check: bool) -> Result<()> {
         let entity = match GalleryEntity::get(gallery_url_param.id()).await? {
@@ -159,10 +151,7 @@ impl ExloliUploader {
             _ => return Ok(()),
         };
 
-        // 2 天内创建的画廊，每天都尝试更新
-        // 7 天内创建的画廊，每 3 天尝试更新
-        // 14 天内创建的画廊，每 7 天尝试更新
-        // 其余的，每 14 天尝试更新
+        // 階梯式更新頻率
         let now = Utc::now().date_naive();
         let seed = match now - message.publish_date {
             d if d < chrono::Duration::days(2) => 1,
@@ -174,22 +163,21 @@ impl ExloliUploader {
             return Ok(());
         }
 
-        // 检查 tag 和标题是否有变化
         let current_gallery_data = self.ehentai.get_gallery(gallery_url_param).await?;
-        let catbox_album_url = self.upload_gallery_image(&current_gallery_data).await?;
+        
+        // 上傳新發現的圖片
+        self.upload_gallery_image(&current_gallery_data).await?;
 
         if current_gallery_data.tags != entity.tags.0 || current_gallery_data.title != entity.title
         {
             let telegraph = TelegraphEntity::get(current_gallery_data.url.id())
                 .await?
                 .unwrap();
+                
             let text = self
-                .create_message_text(
-                    &current_gallery_data,
-                    &telegraph.url,
-                    catbox_album_url.as_deref(),
-                )
+                .create_message_text(&current_gallery_data, &telegraph.url)
                 .await?;
+                
             self.bot
                 .edit_message_text(
                     self.config.telegram.channel_id.clone(),
@@ -204,18 +192,20 @@ impl ExloliUploader {
         Ok(())
     }
 
-    /// 重新发布指定画廊的文章，并更新消息
+    /// 重新發布指定畫廊的文章，並更新訊息
     pub async fn republish(&self, gallery: &GalleryEntity, msg: &MessageEntity) -> Result<()> {
-        info!("重新发布：{}", msg.id);
+        info!("重新發布：{}", msg.id);
         let article = self.publish_telegraph_article(gallery).await?;
 
         let eh_gallery_url = gallery.url();
         let gallery_data_for_catbox = self.ehentai.get_gallery(&eh_gallery_url).await?;
-        let catbox_album_url = self.upload_gallery_image(&gallery_data_for_catbox).await?;
+        
+        self.upload_gallery_image(&gallery_data_for_catbox).await?;
 
         let text = self
-            .create_message_text(gallery, &article.url, catbox_album_url.as_deref())
+            .create_message_text(gallery, &article.url)
             .await?;
+            
         self.bot
             .edit_message_text(
                 self.config.telegram.channel_id.clone(),
@@ -227,126 +217,138 @@ impl ExloliUploader {
         Ok(())
     }
 
-    /// 检查 telegraph 文章是否正常
     pub async fn check_telegraph(&self, url: &str) -> Result<bool> {
         Ok(Client::new().head(url).send().await?.status() != StatusCode::NOT_FOUND)
     }
 }
 
+// ==========================================
+// 重傳與檢測模組
+// ==========================================
 impl ExloliUploader {
-    async fn upload_gallery_image(&self, gallery: &EhGallery) -> Result<Option<String>> {
-        // 收集需要上传的图片
-        let mut pages_to_upload = vec![];
+    pub async fn reupload(&self, mut galleries: Vec<GalleryEntity>) -> Result<()> {
+        if galleries.is_empty() {
+            galleries = GalleryEntity::list_scans().await?;
+        }
+        for gallery in galleries.iter().rev() {
+            if let Some(score) = PollEntity::get_by_gallery(gallery.id).await? {
+                if score.score > 0.8 {
+                    info!("嘗試上傳畫廊：{}", gallery.url());
+                    if let Err(err) = self.try_upload(&gallery.url(), true).await {
+                        error!("上傳失敗：{}", err);
+                    }
+                    time::sleep(Duration::from_secs(60)).await;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn recheck(&self, mut galleries: Vec<GalleryEntity>) -> Result<()> {
+        if galleries.is_empty() {
+            galleries = GalleryEntity::list_scans().await?;
+        }
+        for gallery in galleries.iter().rev() {
+            let telegraph = TelegraphEntity::get(gallery.id)
+                .await?
+                .ok_or(anyhow!("找不到 telegraph"))?;
+            if let Some(msg) = MessageEntity::get_by_gallery(gallery.id).await? {
+                info!("檢測畫廊：{}", gallery.url());
+                if !self.check_telegraph(&telegraph.url).await? {
+                    info!("重新上傳預覽：{}", gallery.url());
+                    if let Err(err) = self.republish(gallery, &msg).await {
+                        error!("上傳失敗：{}", err);
+                    }
+                    time::sleep(Duration::from_secs(60)).await;
+                }
+            }
+            time::sleep(Duration::from_secs(1)).await;
+        }
+        Ok(())
+    }
+}
+
+// ==========================================
+// 核心併發圖床流轉與 Telegraph 渲染邏輯
+// ==========================================
+impl ExloliUploader {
+    /// 獲取畫廊圖片，並透過 MPSC 通道流轉到 Freeimage 圖床
+    async fn upload_gallery_image(&self, gallery: &EhGallery) -> Result<()> {
+        let mut pages = vec![];
         for page in &gallery.pages {
             match ImageEntity::get_by_hash(page.hash()).await? {
                 Some(img) => {
                     PageEntity::create(page.gallery_id(), page.page(), img.id).await?;
                 }
-                None => pages_to_upload.push(page.clone()),
+                None => pages.push(page.clone()),
             }
         }
-        info!("需要上传的图片数: {}", pages_to_upload.len());
+        info!("需要下載 & 上傳 {} 張圖片", pages.len());
+        if pages.is_empty() { return Ok(()); }
 
-        if pages_to_upload.is_empty() && gallery.pages.is_empty() {
-             // 如果画廊本身就没图片，或者所有图片都已在数据库中，则无需创建或查找相册
-            return Ok(None);
-        }
-
-
+        let concurrent = self.config.threads_num;
+        let (tx, mut rx) = tokio::sync::mpsc::channel(concurrent * 2);
         let client = self.ehentai.clone();
-        let catbox = CatboxUploader::new(
-            &self.config.catbox.api_url,
-            &self.config.catbox.userhash,
+
+        // 生產者：單執行緒解析 E-Hentai 圖片源地址 (防止被封禁)
+        let getter = tokio::spawn(
+            async move {
+                for page in pages {
+                    let rst = client.get_image_url(&page).await?;
+                    debug!("已解析 E 站直鏈：{}", page.page());
+                    tx.send((page, rst)).await?;
+                }
+                Result::<()>::Ok(())
+            }
+            .in_current_span(),
         );
 
-        // 上传的文件短链接列表
-        let mut uploaded_file_names = vec![];
-
-        // 上传图片
-        for page in pages_to_upload {
-            let rst = client.get_image_url(&page).await?;
-            let mut suffix = rst.1.split('.').last().unwrap_or("jpg");
-            // 检查是否为 webp 格式，若是则将后缀修改为 jpg
-            if suffix == "webp" {
-                suffix = "jpg";
-            }
-            if suffix == "gif" {
-                continue; // 忽略 GIF 图片
-            }
-
-            let file_name_on_catbox = format!("{}.{}", page.hash(), suffix);
-            let file_bytes = reqwest::get(&rst.1).await?.bytes().await?.to_vec();
-            debug!("已下载: {}", page.page());
-
-            // 调用 CatboxUploader 上传文件
-            match catbox
-                .upload_file(&file_name_on_catbox, &file_bytes)
-                .await
-            {
-                Ok(file_url_on_catbox) => {
-                    debug!("已上传: {}", page.page());
-                    // 记录到数据库
-                    ImageEntity::create(rst.0, page.hash(), &file_url_on_catbox).await?;
-                    PageEntity::create(page.gallery_id(), page.page(), rst.0).await?;
-
-                    // 只收集文件的短链接（文件名）
-                    let file_short_name = file_url_on_catbox
-                        .split('/')
-                        .last()
-                        .unwrap_or(""); // 获取短链接部分，如：4b71m5.webp
-                    if !file_short_name.is_empty() {
-                        uploaded_file_names.push(file_short_name.to_string());
+        // 消費者：負責並行下載並上傳至圖床
+        let api_key = self.config.freeimage.api_key.clone();
+        let http_client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()?;
+            
+        let uploader = tokio::spawn(
+            async move {
+                let freeimage = FreeimageUploader::new(&api_key);
+                while let Some((page, (fileindex, url))) = rx.recv().await {
+                    let mut suffix = url.split('.').last().unwrap_or("jpg");
+                    
+                    // 相容性修正：將 webp 轉為 jpg 騙過 Telegram 預覽
+                    if suffix == "webp" { suffix = "jpg"; }
+                    if suffix == "gif" { continue; } 
+                    
+                    let filename = format!("{}.{}", page.hash(), suffix);
+                    
+                    // 容錯設計：單張圖片上傳失敗只會記錄 Error，不會導致整個應用程式崩潰
+                    match http_client.get(url).send().await {
+                        Ok(res) => {
+                            if let Ok(bytes) = res.bytes().await {
+                                match freeimage.upload_file(&filename, &bytes).await {
+                                    Ok(uploaded_url) => {
+                                        info!("已上傳至圖床: {} -> {}", page.page(), uploaded_url);
+                                        ImageEntity::create(fileindex, page.hash(), &uploaded_url).await?;
+                                        PageEntity::create(page.gallery_id(), page.page(), fileindex).await?;
+                                    }
+                                    Err(err) => error!("圖片 {} 上傳圖床失敗: {}", page.page(), err),
+                                }
+                            }
+                        }
+                        Err(err) => error!("圖片 {} 從 E 站下載失敗: {}", page.page(), err),
                     }
                 }
-                Err(err) => {
-                    // 通常，单个图片上传失败不应阻止整个流程，但可能需要记录
-                    error!("图片 {} 上传失败: {}", page.page(), err);
-                }
+                Result::<()>::Ok(())
             }
-        }
+            .in_current_span(),
+        );
 
-        // 如果有新上传的文件，则创建专辑
-        if !uploaded_file_names.is_empty() {
-            let album_title = gallery.title_jp(); // 优先使用日文标题
-            let album_desc = self.config.telegraph.author_name.clone(); // 描述为作者名
-
-            match catbox
-                .create_album(
-                    &album_title,
-                    &album_desc,
-                    &uploaded_file_names
-                        .iter()
-                        .map(String::as_str)
-                        .collect::<Vec<_>>(),
-                )
-                .await
-            {
-                Ok(album_url) => {
-                    info!("专辑创建成功，专辑 : {}", album_url);
-                    Ok(Some(album_url)) // 返回专辑 URL
-                }
-                Err(err) => {
-                    error!("专辑创建失败: {}", err);
-                    // 即使专辑创建失败，图片可能已上传，所以这里返回 Ok(None) 表示没有专辑链接
-                    Ok(None)
-                }
-            }
-        } else if !gallery.pages.is_empty() && uploaded_file_names.is_empty() {
-            // 没有新上传的文件，但画廊本身有图片（意味着所有图片都已在Catbox上）
-            // 这种情况下，我们不创建新专辑，因为没有新的文件名可以传递给 create_album
-            // 如果需要，这里可以添加逻辑来查找之前可能为这个画廊创建的专辑，但这需要数据库支持
-            // 目前简单处理为：如果没有新文件上传，就不尝试创建/返回专辑链接。
-            debug!("没有新的图片需要上传到Catbox，不创建新专辑。");
-            Ok(None)
-        }
-         else {
-            // 没有文件上传（pages_to_upload 为空），并且画廊本身也没有页面 (gallery.pages 为空)
-            // 或者有图片但没有一个成功上传并获得文件名
-            Ok(None)
-        }
+        // 等待解析與上傳進程結束
+        tokio::try_join!(flatten(getter), flatten(uploader))?;
+        Ok(())
     }
 
-    // 从数据库中读取某个画廊的所有图片，生成一篇 telegraph 文章
+    /// 從資料庫提取圖片，產生 Telegraph 預覽文章
     async fn publish_telegraph_article<T: GalleryInfo>(
         &self,
         gallery: &T,
@@ -355,30 +357,26 @@ impl ExloliUploader {
 
         let mut html = String::new();
         if gallery.cover() != 0 && gallery.cover() < images.len() {
-            html.push_str(&format!(
-                r#"<img src="{}">"#,
-                images[gallery.cover()].url()
-            ))
+            html.push_str(&format!(r#"<img src="{}">"#, images[gallery.cover()].url()))
         }
         for img in images {
             html.push_str(&format!(r#"<img src="{}">"#, img.url()));
         }
+        
+        // 保留你特有的 ACG 結尾美化排版
         html.push_str(&format!("<p>ᴘᴀɢᴇꜱ : {}</p>", gallery.pages()));
 
         let node = html_to_node(&html);
-        // 文章标题优先使用日文
         let title = gallery.title_jp();
         Ok(self.telegraph.create_page(&title, &node, false).await?)
     }
 
-    /// 为画廊生成一条可供发送的 telegram 消息正文
+    /// 產生 Telegram 推送的精美圖文排版
     async fn create_message_text<T: GalleryInfo>(
         &self,
         gallery: &T,
         article_url: &str,
-        catbox_album_url: Option<&str>,
     ) -> Result<String> {
-        // 首先，将 tag 翻译
         let re = Regex::new("[-/· ]").unwrap();
         let tags = self.trans.trans_tags(gallery.tags());
         let mut text = String::new();
@@ -391,74 +389,18 @@ impl ExloliUploader {
                 .join(" ");
             text.push_str(&format!("⁣⁣⁣⁣　<code>{}</code>: <i>{}</i>\n", ns, tag))
         }
-        text.push_str(&format!(
-            "\n<b>〔 <a href=\"{}\">即 時 預 覽</a> 〕</b>/",
-            article_url
-        ));
-        text.push_str(&format!(
-            "<b>〔 <a href=\"{}\">来 源</a> 〕</b>", // 在这里结束，如果后面有专辑链接则会加上 /
-            gallery.url().url()
-        ));
+        text.push_str(&format!("\n<b>〔 <a href=\"{}\">即 時 預 覽</a> 〕</b>/", article_url));
+        text.push_str(&format!("<b>〔 <a href=\"{}\">來 源</a> 〕</b>", gallery.url().url()));
 
-        if let Some(album_url) = catbox_album_url {
-            text.push_str(&format!(
-                "/<b>〔 <a href=\"{}\">專 輯</a> 〕</b>",
-                album_url
-            ));
-        }
         Ok(text)
     }
 }
 
+// 解析 Tokio Spawn 協程回傳值的輔助巨集函數
 async fn flatten<T>(handle: JoinHandle<Result<T>>) -> Result<T> {
     match handle.await {
         Ok(Ok(result)) => Ok(result),
         Ok(Err(err)) => Err(err),
         Err(err) => bail!(err),
-    }
-}
-
-impl ExloliUploader {
-    /// 重新扫描并上传没有上传过但存在记录的画廊
-    pub async fn reupload(&self, mut galleries: Vec<GalleryEntity>) -> Result<()> {
-        if galleries.is_empty() {
-            galleries = GalleryEntity::list_scans().await?;
-        }
-        for gallery in galleries.iter().rev() {
-            if let Some(score) = PollEntity::get_by_gallery(gallery.id).await? {
-                if score.score > 0.8 {
-                    info!("尝试上传画廊：{}", gallery.url());
-                    if let Err(err) = self.try_upload(&gallery.url(), true).await {
-                        error!("上传失败：{}", err);
-                    }
-                    time::sleep(Duration::from_secs(60)).await;
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// 重新检测已上传过的画廊预览是否有效，并重新上传
-    pub async fn recheck(&self, mut galleries: Vec<GalleryEntity>) -> Result<()> {
-        if galleries.is_empty() {
-            galleries = GalleryEntity::list_scans().await?;
-        }
-        for gallery in galleries.iter().rev() {
-            let telegraph = TelegraphEntity::get(gallery.id)
-                .await?
-                .ok_or(anyhow!("找不到 telegraph"))?;
-            if let Some(msg) = MessageEntity::get_by_gallery(gallery.id).await? {
-                info!("检测画廊：{}", gallery.url());
-                if !self.check_telegraph(&telegraph.url).await? {
-                    info!("重新上传预览：{}", gallery.url());
-                    if let Err(err) = self.republish(gallery, &msg).await {
-                        error!("上传失败：{}", err);
-                    }
-                    time::sleep(Duration::from_secs(60)).await;
-                }
-            }
-            time::sleep(Duration::from_secs(1)).await;
-        }
-        Ok(())
     }
 }
