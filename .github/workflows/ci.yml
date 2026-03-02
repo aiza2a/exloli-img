@@ -29,7 +29,7 @@ jobs:
         with:
           push: true
           tags: |
-            hpilosit/exloli-imgx:latest
-            hpilosit/exloli-imgx:${{ env.VERSIONED_TAG }}
+            aizawa/exloli-imgx:latest
+            aizawa/exloli-imgx:${{ env.VERSIONED_TAG }}
           cache-from: type=gha,scope=${{ github.workflow }}
           cache-to: type=gha,mode=max,scope=${{ github.workflow }}
