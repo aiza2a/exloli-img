@@ -26,7 +26,7 @@ where
 {
     dptree::filter(|message: Message, cfg: Config| {
         message.from().map(|u| u.id.0 == 777000).unwrap_or_default()
-            && message.text().map(|s| s.contains("来 源")).unwrap_or_default()
+            && message.text().map(|s| s.contains("來 源")).unwrap_or_default()
             && cfg.telegram.group_id == message.chat.id
     })
 }
