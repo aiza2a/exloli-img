@@ -18,13 +18,19 @@ pub struct Config {
     pub exhentai: ExHentai,
     pub telegraph: Telegraph,
     pub telegram: Telegram,
-    pub freeimage: FreeimageConfig, 
+    pub imgbb: ImgBBConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct FreeimageConfig {
     pub api_key: String,
 }
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct ImgBBConfig {
+    pub api_key: String,
+}
+
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ExHentai {
