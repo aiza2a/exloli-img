@@ -11,7 +11,6 @@ use teloxide::prelude::*;
 use teloxide::types::MessageId;
 use tokio::task::JoinHandle;
 use tokio::time;
-// 這裡正確引入了 Instrument，解決編譯報錯問題
 use tracing::{debug, error, info, Instrument};
 
 use crate::bot::Bot;
@@ -20,7 +19,7 @@ use crate::database::{
     GalleryEntity, ImageEntity, MessageEntity, PageEntity, PollEntity, TelegraphEntity,
 };
 use crate::ehentai::{EhClient, EhGallery, EhGalleryUrl, GalleryInfo};
-use crate::freeimage::FreeimageUploader;
+use crate::imgbb::ImgBBUploader;
 use crate::tags::EhTagTransDB;
 
 #[derive(Debug, Clone)]
@@ -272,7 +271,7 @@ impl ExloliUploader {
 // 核心併發圖床流轉與 Telegraph 渲染邏輯
 // ==========================================
 impl ExloliUploader {
-    /// 獲取畫廊圖片，並透過 MPSC 通道流轉到 Freeimage 圖床
+    /// 獲取畫廊圖片，並透過 MPSC 通道流轉到 ImgBB
     async fn upload_gallery_image(&self, gallery: &EhGallery) -> Result<()> {
         let mut pages = vec![];
         for page in &gallery.pages {
@@ -286,11 +285,12 @@ impl ExloliUploader {
         info!("需要下載 & 上傳 {} 張圖片", pages.len());
         if pages.is_empty() { return Ok(()); }
 
+        // MPSC 併發通道：保留 next 的架構優勢
         let concurrent = self.config.threads_num;
         let (tx, mut rx) = tokio::sync::mpsc::channel(concurrent * 2);
         let client = self.ehentai.clone();
 
-        // 生產者：單執行緒解析 E-Hentai 圖片源地址 (防止被封禁)
+        // 生產者：單執行緒慢慢解析 E-Hentai 圖片源地址，防封禁
         let getter = tokio::spawn(
             async move {
                 for page in pages {
@@ -303,35 +303,35 @@ impl ExloliUploader {
             .in_current_span(),
         );
 
-        // 消費者：負責並行下載並上傳至圖床
-        let api_key = self.config.freeimage.api_key.clone();
+        // 消費者：負責並行下載並上傳至 ImgBB
+        let api_key = self.config.imgbb.api_key.clone();
         let http_client = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
             .build()?;
             
         let uploader = tokio::spawn(
             async move {
-                let freeimage = FreeimageUploader::new(&api_key);
+                let imgbb = ImgBBUploader::new(&api_key);
                 while let Some((page, (fileindex, url))) = rx.recv().await {
                     let mut suffix = url.split('.').last().unwrap_or("jpg");
                     
-                    // 相容性修正：將 webp 轉為 jpg 騙過 Telegram 預覽
+                    // 保留 catx 針對 Telegram 預覽 webp 的修復 Hack
                     if suffix == "webp" { suffix = "jpg"; }
                     if suffix == "gif" { continue; } 
                     
                     let filename = format!("{}.{}", page.hash(), suffix);
                     
-                    // 容錯設計：單張圖片上傳失敗只會記錄 Error，不會導致整個應用程式崩潰
+                    // 容錯機制：單張失敗不中斷進程 (Fail-Safe)
                     match http_client.get(url).send().await {
                         Ok(res) => {
                             if let Ok(bytes) = res.bytes().await {
-                                match freeimage.upload_file(&filename, &bytes).await {
+                                match imgbb.upload_file(&filename, &bytes).await {
                                     Ok(uploaded_url) => {
-                                        info!("已上傳至圖床: {} -> {}", page.page(), uploaded_url);
+                                        info!("已上傳至 ImgBB: {} -> {}", page.page(), uploaded_url);
                                         ImageEntity::create(fileindex, page.hash(), &uploaded_url).await?;
                                         PageEntity::create(page.gallery_id(), page.page(), fileindex).await?;
                                     }
-                                    Err(err) => error!("圖片 {} 上傳圖床失敗: {}", page.page(), err),
+                                    Err(err) => error!("圖片 {} 上傳 ImgBB 失敗: {}", page.page(), err),
                                 }
                             }
                         }
@@ -343,12 +343,11 @@ impl ExloliUploader {
             .in_current_span(),
         );
 
-        // 等待解析與上傳進程結束
         tokio::try_join!(flatten(getter), flatten(uploader))?;
         Ok(())
     }
 
-    /// 從資料庫提取圖片，產生 Telegraph 預覽文章
+    /// 產生 Telegraph 文章 (剔除了多餘的相冊邏輯)
     async fn publish_telegraph_article<T: GalleryInfo>(
         &self,
         gallery: &T,
@@ -363,7 +362,7 @@ impl ExloliUploader {
             html.push_str(&format!(r#"<img src="{}">"#, img.url()));
         }
         
-        // 保留你特有的 ACG 結尾美化排版
+        // 保留 catx 的結尾排版
         html.push_str(&format!("<p>ᴘᴀɢᴇꜱ : {}</p>", gallery.pages()));
 
         let node = html_to_node(&html);
@@ -371,7 +370,7 @@ impl ExloliUploader {
         Ok(self.telegraph.create_page(&title, &node, false).await?)
     }
 
-    /// 產生 Telegram 推送的精美圖文排版
+    /// 構建 Telegram 推送訊息 (保留 catx 繁體中文排版，並移除無用的 album_url 參數)
     async fn create_message_text<T: GalleryInfo>(
         &self,
         gallery: &T,
@@ -396,7 +395,6 @@ impl ExloliUploader {
     }
 }
 
-// 解析 Tokio Spawn 協程回傳值的輔助巨集函數
 async fn flatten<T>(handle: JoinHandle<Result<T>>) -> Result<T> {
     match handle.await {
         Ok(Ok(result)) => Ok(result),
