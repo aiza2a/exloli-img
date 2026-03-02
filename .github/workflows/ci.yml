@@ -2,8 +2,8 @@ name: build and upload docker image
 
 on:
   push:
-    branches:
-      - master
+    tags:
+      - 'v*'
 
 jobs:
   build_and_upload:
@@ -11,6 +11,12 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Extract tag
+        id: prep
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          echo "VERSIONED_TAG=${VERSION}" >> $GITHUB_ENV
 
       - uses: docker/setup-buildx-action@v3
 
@@ -22,6 +28,8 @@ jobs:
       - uses: docker/build-push-action@v5
         with:
           push: true
-          tags: hpilosit/exloli-catx:latest
+          tags: |
+            hpilosit/exloli-catx:latest
+            hpilosit/exloli-catx:${{ env.VERSIONED_TAG }}
           cache-from: type=gha,scope=${{ github.workflow }}
           cache-to: type=gha,mode=max,scope=${{ github.workflow }}
