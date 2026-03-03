@@ -30,7 +30,7 @@ pub enum PublicCommand {
     Ping,
     #[command(description = "顯示幫助信息")]
     Help,
-    #[command(description = "隨機抽取一本本子 (用法: /random [標籤] [數量])")]
+    #[command(description = "隨機抽取一本本子 (用法: /random [標籤] [數量(最大为10)])")]
     Random(String),
     #[command(description = "查看 Bot 數據統計")]
     Stats,
