@@ -42,9 +42,11 @@ impl ImageEntity {
         if self.url.starts_with("/file/") { format!("https://telegra.ph{}", self.url) } else { self.url.clone() }
     }
 
-    // 🔥【第一階段新增】統計圖片
-    pub async fn count_total() -> Result<i32> {
-        sqlx::query_scalar!("SELECT COUNT(*) FROM image").fetch_one(&*DB).await
+    // 🔥【第一階段新增】統計圖片 (已修改為普通函數，並修正表名為 image)
+    pub async fn count() -> Result<i32> {
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM image")
+            .fetch_one(&*DB).await?;
+        Ok(count as i32)
     }
 }
 
