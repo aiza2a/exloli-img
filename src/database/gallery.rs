@@ -1,194 +1,173 @@
-use std::ops::Deref;
-
-use chrono::prelude::*;
-use chrono::Duration;
-use indexmap::IndexMap;
-use sqlx::database::HasValueRef;
-use sqlx::error::BoxDynError;
-use sqlx::prelude::*;
-use sqlx::sqlite::SqliteQueryResult;
-use sqlx::{Database, Result, Sqlite};
-use tracing::Level;
+use anyhow::Result;
+use chrono::NaiveDate;
 
 use super::db::DB;
-use crate::config::CHANNEL_ID;
-use crate::ehentai::EhGallery;
+use crate::ehentai::GalleryInfo;
 
-// 此处使用 IndexMap，因为我们需要保证相同的 tag 每次序列化的结果都是一样的
 #[derive(Debug, Clone, Default)]
-pub struct TagsEntity(pub IndexMap<String, Vec<String>>);
-
-#[derive(Debug, Clone, FromRow)]
 pub struct GalleryEntity {
-    /// 画廊 ID
     pub id: i32,
-    /// 画廊 token
     pub token: String,
-    /// 画廊标题
     pub title: String,
-    /// 画廊日文标题
     pub title_jp: Option<String>,
-    /// JSON 格式的画廊标签
-    /// 旧画廊可能为空
-    pub tags: TagsEntity,
-    /// 收藏数量
-    pub favorite: Option<i32>,
-    /// 页面数量
-    pub pages: i32,
-    /// 父画廊
-    pub parent: Option<i32>,
-    /// 是否已删除
+    pub tags: sqlx::types::Json<Vec<String>>,
+    pub view: i32,
+    pub posted: Option<NaiveDate>,
     pub deleted: bool,
-    /// 发布时间
-    pub posted: Option<NaiveDateTime>,
 }
 
 impl GalleryEntity {
-    /// 创建一条记录
-    #[tracing::instrument(level = Level::DEBUG)]
-    pub async fn create(g: &EhGallery) -> Result<SqliteQueryResult> {
-        let id = g.url.id();
-        let token = g.url.token();
-        let tags = serde_json::to_string(&g.tags).unwrap();
-        let pages = g.pages.len() as i32;
-        let parent = g.parent.as_ref().map(|g| g.id());
-        sqlx::query!(
-            "REPLACE INTO gallery (id, token, title, title_jp, tags, favorite, pages, parent, deleted, posted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            id,
-            token,
-            g.title,
-            g.title_jp,
-            tags,
-            g.favorite,
-            pages,
-            parent,
-            false,
-            g.posted,
+    pub async fn create(g: &impl GalleryInfo) -> Result<i32> {
+        let pool = DB.get().unwrap();
+        let rec = sqlx::query!(
+            "INSERT OR REPLACE INTO gallery (id, token, title, title_jp, tags, view, posted) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            g.url().id(),
+            g.url().token(),
+            g.title(),
+            g.title_jp(),
+            sqlx::types::Json(g.tags()),
+            0,
+            g.posted(),
         )
-            .execute(&*DB)
-            .await
+        .execute(pool)
+        .await?;
+        Ok(rec.last_insert_rowid() as i32)
     }
 
-    /// 根据 ID 获取一条记录
-    ///
-    /// 注意，此处不会返回已被标记为删除的记录
-    #[tracing::instrument(level = Level::DEBUG)]
-    pub async fn get(id: i32) -> Result<Option<GalleryEntity>> {
-        sqlx::query_as("SELECT * FROM gallery WHERE id = ? AND deleted = FALSE")
-            .bind(id)
-            .fetch_optional(&*DB)
-            .await
+    pub async fn get(id: i32) -> Result<Option<Self>> {
+        let pool = DB.get().unwrap();
+        let rec = sqlx::query_as!(Self, "SELECT * FROM gallery WHERE id = ?", id)
+            .fetch_optional(pool)
+            .await?;
+        Ok(rec)
     }
 
-    /// 根据消息 ID 获取一条记录
-    pub async fn get_by_msg(id: i32) -> Result<Option<GalleryEntity>> {
-        sqlx::query_as(
-            "SELECT gallery.* FROM gallery JOIN message ON gallery.id = message.gallery_id AND message.channel_id = ? WHERE message.id = ? AND gallery.deleted = FALSE"
-        )
-            .bind(CHANNEL_ID.get().unwrap())
-            .bind(id)
-            .fetch_optional(&*DB)
-            .await
-    }
-
-    /// 检查画廊是否存在，此处不会考虑删除标记
-    #[tracing::instrument(level = Level::DEBUG)]
     pub async fn check(id: i32) -> Result<bool> {
-        sqlx::query_scalar!("SELECT EXISTS(SELECT 1 FROM gallery WHERE id = ?)", id)
-            .fetch_one(&*DB)
-            .await
-            .map(|x| x == Some(1))
+        let pool = DB.get().unwrap();
+        let rec = sqlx::query!("SELECT count(*) as count FROM gallery WHERE id = ?", id)
+            .fetch_one(pool)
+            .await?;
+        Ok(rec.count > 0)
     }
 
-    /// 根据 ID 更新 tag
-    #[tracing::instrument(level = Level::DEBUG)]
-    pub async fn update_tags(id: i32, tags: &[(String, Vec<String>)]) -> Result<SqliteQueryResult> {
-        let tags = serde_json::to_string(tags).unwrap();
-        sqlx::query!("UPDATE gallery SET tags = ? WHERE id = ?", tags, id).execute(&*DB).await
+    pub async fn update_deleted(id: i32, deleted: bool) -> Result<()> {
+        let pool = DB.get().unwrap();
+        sqlx::query!("UPDATE gallery SET deleted = ? WHERE id = ?", deleted, id)
+            .execute(pool)
+            .await?;
+        Ok(())
     }
 
-    /// 根据 ID 更新删除状态
-    #[tracing::instrument(level = Level::DEBUG)]
-    pub async fn update_deleted(id: i32, deleted: bool) -> Result<SqliteQueryResult> {
-        sqlx::query!("UPDATE gallery SET deleted = ? WHERE id = ?", deleted, id).execute(&*DB).await
+    pub async fn delete(id: i32) -> Result<()> {
+        let pool = DB.get().unwrap();
+        sqlx::query!("DELETE FROM gallery WHERE id = ?", id)
+            .execute(pool)
+            .await?;
+        Ok(())
     }
 
-    /// 彻底删除一个画廊
-    #[tracing::instrument(level = Level::DEBUG)]
-    pub async fn delete(id: i32) -> Result<SqliteQueryResult> {
-        sqlx::query!("DELETE FROM gallery WHERE id = ?", id).execute(&*DB).await
-    }
-
-    /// 查询自指定日期以来的本子，结果按分数从高到低排列
-    /// 返回 分数、标题、画廊 ID
-    #[tracing::instrument(level = Level::DEBUG)]
     pub async fn list(
         start: NaiveDate,
         end: NaiveDate,
         limit: i32,
         page: i32,
     ) -> Result<Vec<(f32, String, i32)>> {
+        let pool = DB.get().unwrap();
         let offset = page * limit;
-        let record = sqlx::query!(
-            r#"SELECT poll.score, gallery.title, gallery.id
-            FROM gallery
-            JOIN poll ON poll.gallery_id = gallery.id
-            JOIN message ON message.gallery_id = gallery.id
-            WHERE gallery.posted BETWEEN ? AND ?
-            GROUP BY poll.id
-            ORDER BY poll.score DESC LIMIT ? OFFSET ?"#,
+        let rec = sqlx::query!(
+            r#"
+            SELECT T1.score, T2.title, T2.title_jp, T2.id
+            FROM poll AS T1
+            LEFT JOIN gallery AS T2 ON T1.gallery_id = T2.id
+            WHERE T2.posted BETWEEN ? AND ? AND T2.deleted = FALSE
+            ORDER BY T1.score DESC
+            LIMIT ? OFFSET ?
+            "#,
             start,
             end,
             limit,
-            offset,
+            offset
         )
-        .fetch_all(&*DB)
+        .fetch_all(pool)
         .await?;
-        Ok(record.into_iter().map(|x| (x.score as f32, x.title, x.id as i32)).collect())
+        Ok(rec
+            .into_iter()
+            .map(|r| (r.score, r.title_jp.unwrap_or(r.title), r.id as i32))
+            .collect())
     }
 
-    /// 列出所有 80 分以上或最近两个月上传的画廊
+    /// 獲取所有掃描過的畫廊（用於舊版重傳邏輯）
     pub async fn list_scans() -> Result<Vec<Self>> {
-        let since = Utc::now().date_naive() - Duration::days(60);
-        sqlx::query_as(
-            r#"SELECT gallery.*
-            FROM gallery
-            JOIN poll ON poll.gallery_id = gallery.id
-            WHERE gallery.deleted = FALSE AND (poll.score >= 0.8 OR gallery.posted >= ?)"#,
+        let pool = DB.get().unwrap();
+        let rec = sqlx::query_as!(
+            Self,
+            "SELECT * FROM gallery WHERE deleted = FALSE ORDER BY id DESC LIMIT 100"
         )
-        .bind(since)
-        .fetch_all(&*DB)
-        .await
+        .fetch_all(pool)
+        .await?;
+        Ok(rec)
+    }
+
+    pub async fn get_by_msg(id: i32) -> Result<Option<Self>> {
+        let pool = DB.get().unwrap();
+        let rec = sqlx::query_as!(
+            Self,
+            r#"
+            SELECT T2.* FROM message AS T1
+            LEFT JOIN gallery AS T2 ON T1.gallery_id = T2.id
+            WHERE T1.id = ?
+            "#,
+            id
+        )
+        .fetch_optional(pool)
+        .await?;
+        Ok(rec)
+    }
+
+    // ========================================================================
+    // 🔥 第一階段新增功能 (Random & Stats)
+    // ========================================================================
+
+    /// 隨機獲取一個未刪除的畫廊
+    pub async fn get_random() -> Result<Option<Self>> {
+        let pool = DB.get().ok_or(anyhow::anyhow!("資料庫未連接"))?;
+        let rec = sqlx::query_as!(
+            Self,
+            "SELECT * FROM gallery WHERE deleted = FALSE ORDER BY RANDOM() LIMIT 1"
+        )
+        .fetch_optional(pool)
+        .await?;
+        Ok(rec)
+    }
+
+    /// 統計畫廊總數
+    pub async fn count() -> Result<i64> {
+        let pool = DB.get().ok_or(anyhow::anyhow!("資料庫未連接"))?;
+        let rec = sqlx::query!("SELECT COUNT(*) as count FROM gallery WHERE deleted = FALSE")
+            .fetch_one(pool)
+            .await?;
+        Ok(rec.count as i64)
     }
 }
 
-impl<'q> Decode<'q, Sqlite> for TagsEntity {
-    fn decode(
-        value: <Sqlite as HasValueRef<'q>>::ValueRef,
-    ) -> std::result::Result<Self, BoxDynError> {
-        let str = <String as Decode<Sqlite>>::decode(value)?;
-        if str.is_empty() {
-            Ok(TagsEntity(IndexMap::new()))
-        } else {
-            Ok(TagsEntity(serde_json::from_str(&str)?))
-        }
-    }
-}
-
-impl Type<Sqlite> for TagsEntity {
-    fn type_info() -> <Sqlite as Database>::TypeInfo {
-        <String as Type<Sqlite>>::type_info()
+impl GalleryInfo for GalleryEntity {
+    fn url(&self) -> crate::ehentai::EhGalleryUrl {
+        crate::ehentai::EhGalleryUrl::new(self.id, &self.token)
     }
 
-    fn compatible(ty: &<Sqlite as Database>::TypeInfo) -> bool {
-        <String as Type<Sqlite>>::compatible(ty)
+    fn title(&self) -> String {
+        self.title.clone()
     }
-}
 
-impl Deref for TagsEntity {
-    type Target = IndexMap<String, Vec<String>>;
+    fn title_jp(&self) -> String {
+        self.title_jp.clone().unwrap_or(self.title.clone())
+    }
 
-    fn deref(&self) -> &Self::Target {
-        &self.0
+    fn tags(&self) -> Vec<String> {
+        self.tags.0.clone()
+    }
+
+    fn posted(&self) -> Option<NaiveDate> {
+        self.posted
     }
 }
