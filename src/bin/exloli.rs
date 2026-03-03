@@ -1,3 +1,4 @@
+// src/bin/exloli.rs 完整文件内容
 use std::env;
 
 use anyhow::Result;
@@ -35,7 +36,7 @@ async fn main() -> Result<()> {
         .cache_me();
 
     // ========================================================
-    // 🔥🔥🔥【關鍵修改】註冊指令菜單 🔥🔥🔥
+    // 🔥🔥🔥 註冊指令菜單 🔥🔥🔥
     // ========================================================
     
     tracing::info!("正在向 Telegram 註冊指令列表...");
@@ -46,15 +47,19 @@ async fn main() -> Result<()> {
         .await?;
 
     // 2. 為管理員群組註冊完整指令 (包含 AdminCommand)
-    // 只有在 config.toml 中配置的 group_id 群組裡，輸入 / 才會看到 delete, erase 等危險指令
-    if let Recipient::Id(chat_id) = config.telegram.group_id {
+    // 這裡修正了 ChatId 和 Recipient 的轉換邏輯
+    let admin_chat_id = config.telegram.group_id;
+    if !admin_chat_id.is_invalid() {
         let mut full_commands = PublicCommand::bot_commands();
         full_commands.extend(AdminCommand::bot_commands());
         
+        // 將 ChatId 轉換為 Recipient::Id
         bot.set_my_commands(full_commands)
-            .scope(BotCommandScope::Chat { chat_id })
+            .scope(BotCommandScope::Chat { 
+                chat_id: Recipient::Id(admin_chat_id) 
+            })
             .await?;
-        tracing::info!("已為管理群組 {} 註冊管理員指令。", chat_id);
+        tracing::info!("已為管理群組 {} 註冊管理員指令。", admin_chat_id);
     }
     
     tracing::info!("指令註冊完成！");
