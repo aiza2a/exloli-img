@@ -1,11 +1,10 @@
 version: "3.3"
 services:
-  exloli:
-    image: "aloxaf/exloli-next:latest"
-    container_name: exloli
+  skrman:
+    image: ghcr.io/aiza2a/exloli-imgx:latest
+    container_name: EXLOLI-IMGX
     volumes:
-      - ./:/app
-    logging:
-      options:
-        max-size: "128m"
+      - ./db.sqlite:/app/db.sqlite
+      - ./db.text.json:/app/db.text.json
+      - ./config.toml:/app/config.toml
     restart: unless-stopped
