@@ -18,7 +18,7 @@ use crate::bot::scheduler::Scheduler;
 use crate::bot::utils::{ChallengeLocker, ChallengeProvider};
 use crate::bot::Bot;
 use crate::config::Config;
-use crate::database::{GalleryEntity, MessageEntity, PollEntity};
+use crate::database::{GalleryEntity, ImageEntity, MessageEntity, PollEntity};
 use crate::ehentai::{EhGalleryUrl, GalleryInfo};
 use crate::tags::EhTagTransDB;
 use crate::uploader::ExloliUploader;
@@ -34,14 +34,14 @@ pub fn public_command_handler(
         .branch(case![PublicCommand::Best(args)].endpoint(cmd_best))
         .branch(case![PublicCommand::Challenge].endpoint(cmd_challenge))
         .branch(case![PublicCommand::Upload(args)].endpoint(cmd_upload))
+        .branch(case![PublicCommand::Random].endpoint(cmd_random))
+        .branch(case![PublicCommand::Stats].endpoint(cmd_stats))
         .branch(case![PublicCommand::Help].endpoint(cmd_help))
 }
 
 async fn cmd_help(bot: Bot, msg: Message) -> Result<()> {
     let me = bot.get_me().await?;
     let public_help = PublicCommand::descriptions().username_from_me(&me);
-    // 只對管理員顯示管理員指令幫助，或者您可以選擇都顯示
-    // 這裡簡單起見都顯示，實際權限由 filter 控制
     let admin_help = AdminCommand::descriptions().username_from_me(&me);
     let text = format!("<b>管理員指令：</b>\n{}\n\n<b>公共指令：</b>\n{}", admin_help, public_help);
     reply_to!(bot, msg, escape(&text)).await?;
@@ -94,7 +94,6 @@ async fn cmd_challenge(
     let answer = challenge[0].clone();
     challenge.shuffle(&mut thread_rng());
     
-    // 修復：正確處理完整的 URL 和相對路徑，兼容不同圖床
     let url = if answer.url.starts_with("http") {
         answer.url.clone()
     } else {
@@ -163,14 +162,11 @@ async fn cmd_best(
 }
 
 async fn cmd_update(bot: Bot, msg: Message, uploader: ExloliUploader, url_text: String) -> Result<()> {
-    // 這裡 Update 比較特殊，可以是 URL 也可以是回覆消息
-    // 如果用戶沒輸入參數，嘗試檢查是否回覆了消息，如果都沒有才報錯
     let msg_id = if url_text.trim().is_empty() {
         msg.reply_to_message()
             .and_then(|msg| msg.forward_from_message_id())
             .ok_or_else(|| anyhow!("請輸入 URL 或回覆一條畫廊消息"))
     } else {
-        // 嘗試解析
         match Url::parse(&url_text) {
              Ok(u) => Ok(u),
              Err(_) => Err(anyhow!("無效的 URL")),
@@ -183,7 +179,6 @@ async fn cmd_update(bot: Bot, msg: Message, uploader: ExloliUploader, url_text: 
         })
     };
 
-    // 如果上面邏輯報錯（既沒參數也沒回覆），這裡統一處理錯誤提示
     let msg_id = match msg_id {
         Ok(id) => id,
         Err(_) => {
@@ -200,12 +195,10 @@ async fn cmd_update(bot: Bot, msg: Message, uploader: ExloliUploader, url_text: 
 
     let reply = reply_to!(bot, msg, "正在更新元數據...").await?;
 
-    // 調用 rescan_gallery 把失效畫廊重新上傳
     if let Err(e) = uploader.recheck(vec![gl_entity.clone()]).await {
         reply_to!(bot, msg, format!("Recheck 失敗: {}", e)).await?;
     }
     
-    // 看一下有沒有 tag 或者標題需要更新
     if let Err(e) = uploader.try_update(&gl_entity.url(), false).await {
          reply_to!(bot, msg, format!("Update 失敗: {}", e)).await?;
     }
@@ -261,5 +254,64 @@ async fn cmd_query(bot: Bot, msg: Message, cfg: Config, url_text: String) -> Res
             reply_to!(bot, msg, "❌ <b>未找到</b>\n該畫廊尚未被本頻道收錄。").await?;
         }
     }
+    Ok(())
+}
+
+async fn cmd_random(bot: Bot, msg: Message, cfg: Config) -> Result<()> {
+    info!("{}: /random", msg.from().unwrap().id);
+    
+    match GalleryEntity::get_random().await? {
+        Some(gallery) => {
+            let poll = PollEntity::get_by_gallery(gallery.id).await?;
+            let score = poll.as_ref().map(|p| p.score * 100.).unwrap_or(0.0);
+            let rank = match poll {
+                Some(p) => p.rank().await? * 100.,
+                None => 0.0,
+            };
+            
+            let preview = gallery_preview_url(cfg.telegram.channel_id, gallery.id).await?;
+            let url = gallery.url().url();
+            
+            reply_to!(
+                bot,
+                msg,
+                format!(
+                    "🎲 <b>隨機抽取結果</b>\n\n<b>{}</b>\n\n消息：{}\n地址：{}\n評分：{:.2}（{:.2}%）",
+                    gallery.title_jp.unwrap_or(gallery.title),
+                    preview,
+                    url,
+                    score,
+                    rank
+                )
+            )
+            .await?;
+        }
+        None => {
+            reply_to!(bot, msg, "資料庫是空的，先去上傳幾本吧！").await?;
+        }
+    }
+    Ok(())
+}
+
+async fn cmd_stats(bot: Bot, msg: Message) -> Result<()> {
+    info!("{}: /stats", msg.from().unwrap().id);
+    
+    let gallery_count = GalleryEntity::count().await?;
+    let image_count = ImageEntity::count().await?;
+    
+    let avg_pages = if gallery_count > 0 {
+        image_count as f64 / gallery_count as f64
+    } else {
+        0.0
+    };
+
+    let text = format!(
+        "📊 <b>夏萊閱覽室數據統計</b>\n\n📚 <b>藏書總量：</b> <code>{}</code> 本\n🖼 <b>圖片總數：</b> <code>{}</code> 張\n📄 <b>平均頁數：</b> <code>{:.1}</code> 頁/本\n\n<i>Bot 正在持續運轉中...</i>",
+        gallery_count,
+        image_count,
+        avg_pages
+    );
+
+    reply_to!(bot, msg, text).await?;
     Ok(())
 }
