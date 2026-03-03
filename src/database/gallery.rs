@@ -97,6 +97,22 @@ impl GalleryEntity {
             .fetch_optional(&*DB).await
     }
 
+    pub async fn get_random_with_tags(tags: &[String]) -> Result<Option<Self>> {
+        // 動態構建 SQL：每個標籤都必須包含在 JSON 字符串中
+        let mut query = String::from("SELECT * FROM gallery WHERE deleted = FALSE");
+        for _ in tags {
+            query.push_str(" AND tags LIKE ?");
+        }
+        query.push_str(" ORDER BY RANDOM() LIMIT 1");
+
+        let mut q = sqlx::query_as::<_, Self>(&query);
+        // 綁定模糊查詢的變量
+        for tag in tags {
+            q = q.bind(format!("%{}%", tag)); 
+        }
+        q.fetch_optional(&*DB).await
+    }
+    
     pub async fn count() -> Result<i32> {
         let res: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM gallery WHERE deleted = FALSE")
             .fetch_one(&*DB).await?;
