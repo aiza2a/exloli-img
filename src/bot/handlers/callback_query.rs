@@ -19,6 +19,7 @@ pub fn callback_query_handler() -> Handler<'static, DependencyMap, Result<()>, D
     dptree::entry()
         .branch(case![CallbackData::VoteForPoll(poll, option)].endpoint(callback_vote_for_poll))
         .branch(case![CallbackData::Challenge(id, artist)].endpoint(callback_challenge))
+        .branch(case![CallbackData::RandomAnother(tags)].endpoint(callback_random_another)) 
         .endpoint(callback_change_page)
 }
 
@@ -120,5 +121,65 @@ async fn callback_change_page(
             .await?;
     }
 
+    Ok(())
+}
+
+async fn callback_random_another(
+    bot: Bot,
+    query: CallbackQuery,
+    cfg: Config,
+    tags_str: String,
+) -> Result<()> {
+    let message = query.message.context("消息过旧")?;
+    info!("{}: <- random another {}", query.from.id, tags_str);
+
+    let tags: Vec<String> = tags_str.split_whitespace().map(|s| s.to_string()).collect();
+
+    let gallery = if tags.is_empty() {
+        GalleryEntity::get_random().await?
+    } else {
+        GalleryEntity::get_random_with_tags(&tags).await?
+    };
+
+    match gallery {
+        Some(gallery) => {
+            let poll = PollEntity::get_by_gallery(gallery.id).await?;
+            let score = poll.as_ref().map(|p| p.score * 100.).unwrap_or(0.0);
+            let rank = match &poll {
+                Some(p) => p.rank().await? * 100.,
+                None => 0.0,
+            };
+            
+            let preview = gallery_preview_url(cfg.telegram.channel_id.clone(), gallery.id).await?;
+            let url = gallery.url().url();
+            
+            let text = format!(
+                "🎲 <b>隨機抽取結果</b>\n\n<b>{}</b>\n\n📄 <b>預覽：</b>{}\n🔗 <b>地址：</b>{}\n⭐️ <b>評分：</b>{:.2}（{:.2}%）",
+                gallery.title_jp.unwrap_or(gallery.title),
+                preview,
+                url,
+                score,
+                rank
+            );
+
+            let keyboard = teloxide::types::InlineKeyboardMarkup::new(vec![vec![
+                teloxide::types::InlineKeyboardButton::callback("🎲 再來一個本子", CallbackData::RandomAnother(tags_str).pack()),
+            ]]);
+
+            // 推送一本新的
+            bot.send_message(message.chat.id, text)
+                .reply_markup(keyboard)
+                .await?;
+            
+            // 回答 callback 以消除按钮上的转圈动画
+            bot.answer_callback_query(query.id).await?;
+        }
+        None => {
+            bot.answer_callback_query(query.id)
+                .text("沒有找到更多匹配的本子了，請換個標籤試試")
+                .show_alert(true)
+                .await?;
+        }
+    }
     Ok(())
 }
