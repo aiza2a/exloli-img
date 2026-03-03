@@ -45,3 +45,5 @@ jobs:
           platforms: linux/amd64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=registry,ref=ghcr.io/${{ github.repository_owner }}/exloli-imgx:buildcache
+          cache-to: type=registry,ref=ghcr.io/${{ github.repository_owner }}/exloli-imgx:buildcache,mode=max
