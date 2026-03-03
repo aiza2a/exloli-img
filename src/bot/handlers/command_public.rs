@@ -37,7 +37,7 @@ pub fn public_command_handler(
         .branch(case![PublicCommand::Best(args)].endpoint(cmd_best))
         .branch(case![PublicCommand::Challenge].endpoint(cmd_challenge))
         .branch(case![PublicCommand::Upload(args)].endpoint(cmd_upload))
-        .branch(.branch(case![PublicCommand::Random(args)].endpoint(cmd_random)))
+        .branch(case![PublicCommand::Random(args)].endpoint(cmd_random))
         .branch(case![PublicCommand::Stats].endpoint(cmd_stats))
         .branch(case![PublicCommand::Help].endpoint(cmd_help))
 }
