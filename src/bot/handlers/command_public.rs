@@ -19,7 +19,7 @@ use crate::bot::utils::{ChallengeLocker, ChallengeProvider};
 use crate::bot::Bot;
 use crate::config::Config;
 use crate::database::{GalleryEntity, ImageEntity, MessageEntity, PollEntity};
-use crate::ehentai::types::GalleryInfo; // 🔥修復 E0599 的核心：引入包含 url() 方法的 Trait
+use crate::ehentai::GalleryInfo;
 use crate::ehentai::EhGalleryUrl;
 use crate::tags::EhTagTransDB;
 use crate::uploader::ExloliUploader;
