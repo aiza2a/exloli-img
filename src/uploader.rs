@@ -107,11 +107,17 @@ impl ExloliUploader {
 
         let gallery_data = self.ehentai.get_gallery(gallery_url_param).await?;
         
-        // 核心邏輯：直接上傳所有圖片到圖床
-        self.upload_gallery_image(&gallery_data).await?;
+        // 核心修改：检测上传是否完整
+        // 如果 upload_gallery_image 返回 false，说明有图片失败，直接返回，不发送消息
+        // 由于没有写入数据库，下次 check 循环会再次扫描并重试
+        if !self.upload_gallery_image(&gallery_data).await? {
+            error!("畫廊 {} 上傳不完整（存在失敗圖片），跳過本次推送，等待下次重試。", gallery_data.url.id());
+            return Ok(());
+        }
+
         let article = self.publish_telegraph_article(&gallery_data).await?;
         
-        // 建立 Telegram 訊息 (去除了冗餘的相冊 URL 參數)
+        // 建立 Telegram 訊息
         let text = self
             .create_message_text(&gallery_data, &article.url)
             .await?;
@@ -167,8 +173,8 @@ impl ExloliUploader {
 
         let current_gallery_data = self.ehentai.get_gallery(gallery_url_param).await?;
         
-        // 上傳新發現的圖片
-        self.upload_gallery_image(&current_gallery_data).await?;
+        // 上傳新發現的圖片 (忽略返回值，更新流程尽量执行)
+        let _ = self.upload_gallery_image(&current_gallery_data).await?;
 
         if current_gallery_data.tags != entity.tags.0 || current_gallery_data.title != entity.title
         {
@@ -197,13 +203,14 @@ impl ExloliUploader {
     /// 重新發布指定畫廊的文章，並更新訊息
     pub async fn republish(&self, gallery: &GalleryEntity, msg: &MessageEntity) -> Result<()> {
         info!("重新發布：{}", msg.id);
-        let article = self.publish_telegraph_article(gallery).await?;
-
+        
         let eh_gallery_url = gallery.url();
         let gallery_data_for_catbox = self.ehentai.get_gallery(&eh_gallery_url).await?;
         
-        self.upload_gallery_image(&gallery_data_for_catbox).await?;
+        // 补全缺失图片
+        let _ = self.upload_gallery_image(&gallery_data_for_catbox).await?;
 
+        let article = self.publish_telegraph_article(gallery).await?;
         let text = self
             .create_message_text(gallery, &article.url)
             .await?;
@@ -275,7 +282,8 @@ impl ExloliUploader {
 // ==========================================
 impl ExloliUploader {
     /// 獲取畫廊圖片，並透過 MPSC 通道流轉到 ImgBB
-    async fn upload_gallery_image(&self, gallery: &EhGallery) -> Result<()> {
+    /// 返回值：Result<bool>，true 表示本批次所有待处理图片均处理成功（上传成功或GIF被正常跳过）
+    async fn upload_gallery_image(&self, gallery: &EhGallery) -> Result<bool> {
         let mut pages = vec![];
         for page in &gallery.pages {
             match ImageEntity::get_by_hash(page.hash()).await? {
@@ -285,15 +293,17 @@ impl ExloliUploader {
                 None => pages.push(page.clone()),
             }
         }
-        info!("需要下載 & 上傳 {} 張圖片", pages.len());
-        if pages.is_empty() { return Ok(()); }
+        
+        let total_missing = pages.len();
+        info!("需要下載 & 上傳 {} 張圖片", total_missing);
+        if total_missing == 0 { return Ok(true); }
 
-        // MPSC 併發通道：保留 next 的架構優勢
+        // MPSC 併發通道
         let concurrent = self.config.threads_num;
         let (tx, mut rx) = tokio::sync::mpsc::channel(concurrent * 2);
         let client = self.ehentai.clone();
 
-        // 生產者：單執行緒慢慢解析 E-Hentai 圖片源地址，防封禁
+        // 生產者：單執行緒慢慢解析 E-Hentai 圖片源地址
         let getter = tokio::spawn(
             async move {
                 for page in pages {
@@ -306,37 +316,37 @@ impl ExloliUploader {
             .in_current_span(),
         );
 
-        // 消費者：負責並行下載並上傳至 ImgBB
+        // 消費者：利用 Semaphore (信號量) 控制並發數的高效上傳器
         let api_key = self.config.imgbb.api_key.clone();
         let http_client = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
             .build()?;
             
-        // 從你的 config 中讀取允許的並發數 (建議設為 3 到 5)
         let concurrent_limit = self.config.threads_num.max(1); 
         
         let uploader = tokio::spawn(
             async move {
                 let imgbb = ImgBBUploader::new(&api_key);
-                // 創建信號量，嚴格限制同時向 ImgBB 發起請求的數量
                 let semaphore = Arc::new(Semaphore::new(concurrent_limit));
-                // 創建任務集合，管理所有非同步上傳任務
                 let mut join_set = JoinSet::new();
+                let mut processed_count = 0; // 记录成功处理（上传或跳过）的数量
 
                 while let Some((page, (fileindex, url))) = rx.recv().await {
                     let mut suffix = url.split('.').last().unwrap_or("jpg");
                     
                     if suffix == "webp" { suffix = "jpg"; }
-                    if suffix == "gif" { continue; } 
+                    if suffix == "gif" { 
+                        // GIF 被判定为“已处理”（虽然是跳过），计数+1
+                        processed_count += 1;
+                        continue; 
+                    } 
                     
                     let filename = format!("{}.{}", page.hash(), suffix);
                     
-                    // 等待獲取通行證（如果當前並發數滿了，這裡會阻塞等待）
                     let permit = semaphore.clone().acquire_owned().await.unwrap();
                     let client_clone = http_client.clone();
                     let imgbb_clone = imgbb.clone();
 
-                    // 開啟新的協程並發處理單張圖片
                     join_set.spawn(async move {
                         let mut success = false;
                         for attempt in 1..=3 {
@@ -357,28 +367,44 @@ impl ExloliUploader {
                                 }
                                 Err(err) => error!("圖片 {} 從 E 站下載失敗 (嘗試 {}/3): {}", page.page(), attempt, err),
                             }
-                            // 失敗退避：只讓當前這個失敗的協程休眠 3 秒，不影響其他正在上傳的圖片！
                             if attempt < 3 { tokio::time::sleep(Duration::from_secs(3)).await; }
                         }
                         
                         if !success { error!("🚨 圖片 {} 徹底上傳失敗，已放棄！", page.page()); }
                         
-                        // 任務結束，自動釋放 permit，允許下一張圖片開始上傳
                         drop(permit);
+                        success // 返回本次任务是否成功
                     }.in_current_span());
                 }
                 
-                // 等待所有並發上傳任務全部執行完畢
+                // 等待所有并发任务完成，并统计成功数
                 while let Some(res) = join_set.join_next().await {
-                    if let Err(e) = res { error!("並發任務執行異常: {}", e); }
+                    match res {
+                        Ok(true) => processed_count += 1, // 任务成功，计数+1
+                        Ok(false) => {}, // 任务失败，不计数
+                        Err(e) => error!("並發任務執行異常: {}", e),
+                    }
                 }
                 
-                Result::<()>::Ok(())
+                // 返回总处理成功数
+                Result::<usize>::Ok(processed_count)
             }
             .in_current_span(),
         );
 
-    /// 產生 Telegraph 文章 (剔除了多餘的相冊邏輯)
+        let (_, count) = tokio::try_join!(flatten(getter), flatten(uploader))?;
+        
+        // 最终比对：成功处理数 是否等于 本次待处理总数
+        if count == total_missing {
+            info!("本批次圖片處理完整 ({} / {})", count, total_missing);
+            Ok(true)
+        } else {
+            error!("本批次圖片處理不完整 ({} / {})，存在失敗項目", count, total_missing);
+            Ok(false)
+        }
+    }
+
+    /// 產生 Telegraph 文章
     async fn publish_telegraph_article<T: GalleryInfo>(
         &self,
         gallery: &T,
@@ -393,7 +419,6 @@ impl ExloliUploader {
             html.push_str(&format!(r#"<img src="{}">"#, img.url()));
         }
         
-        // 保留 catx 的結尾排版
         html.push_str(&format!("<p>ᴘᴀɢᴇꜱ : {}</p>", gallery.pages()));
 
         let node = html_to_node(&html);
@@ -401,7 +426,7 @@ impl ExloliUploader {
         Ok(self.telegraph.create_page(&title, &node, false).await?)
     }
 
-    /// 構建 Telegram 推送訊息 (保留 catx 繁體中文排版，並移除無用的 album_url 參數)
+    /// 構建 Telegram 推送訊息
     async fn create_message_text<T: GalleryInfo>(
         &self,
         gallery: &T,
