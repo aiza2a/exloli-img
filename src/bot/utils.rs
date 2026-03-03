@@ -45,9 +45,13 @@ impl CallbackData {
             Self::NextPage(a, b, c) => format!("> {} {} {}", a, b, c),
             Self::PrevPage(a, b, c) => format!("< {} {} {}", a, b, c),
             Self::Challenge(a, b) => format!("challenge {}:{}", a, b),
-            // 新增 pack 邏輯
             Self::RandomAnother(tags) => {
-                if tags.is_empty() { "random".to_string() } else { format!("random {}", tags) }
+                if tags.is_empty() { 
+                    "random".to_string() 
+                } else { 
+                    format!("random {}", tags) 
+                }
+            }
         }
     }
 
