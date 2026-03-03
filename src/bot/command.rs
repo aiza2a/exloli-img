@@ -34,4 +34,9 @@ pub enum PublicCommand {
     Ping,
     #[command(description = "顯示幫助信息")]
     Help,
+    // 🔥【新增】下面這兩個
+    #[command(description = "隨機抽取一本本子")]
+    Random,
+    #[command(description = "查看 Bot 數據統計")]
+    Stats,
 }
