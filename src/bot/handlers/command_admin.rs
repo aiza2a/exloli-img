@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use std::str::FromStr;
 use teloxide::dispatching::DpHandlerDescription;
 use teloxide::dptree::case;
