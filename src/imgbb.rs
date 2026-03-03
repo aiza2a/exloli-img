@@ -25,7 +25,7 @@ struct ImgBBError {
 
 #[derive(Clone)]
 pub struct ImgBBUploader {
-    api_key: String,
+    pub api_key: String,
     client: Client,
 }
 
