@@ -283,6 +283,8 @@ impl ExloliUploader {
 impl ExloliUploader {
     /// 獲取畫廊圖片，並透過 MPSC 通道流轉到 ImgBB
     /// 返回值：Result<bool>，true 表示本批次所有待处理图片均处理成功（上传成功或GIF被正常跳过）
+    /// 獲取畫廊圖片，並透過 MPSC 通道流轉到 ImgBB
+    /// 返回值：Result<bool>，true 表示本批次所有待处理图片均处理成功
     async fn upload_gallery_image(&self, gallery: &EhGallery) -> Result<bool> {
         let mut pages = vec![];
         for page in &gallery.pages {
@@ -316,36 +318,51 @@ impl ExloliUploader {
             .in_current_span(),
         );
 
-        // 消費者：利用 Semaphore (信號量) 控制並發數的高效上傳器
-        let api_key = self.config.imgbb.api_key.clone();
+        // 消費者：多 Key 輪詢 + 併發控制
+        // 從配置中讀取所有的 API Keys
+        let api_keys = self.config.imgbb.api_keys.clone(); 
+        if api_keys.is_empty() {
+             bail!("未配置 ImgBB API Key！請在 config.toml 中填寫 [imgbb] api_keys");
+        }
+
         let http_client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(30))
+            .timeout(Duration::from_secs(60)) // 延長超時以適應輪詢
             .build()?;
             
-        let concurrent_limit = self.config.threads_num.max(1); 
+        // 併發限制：建議保持較低 (如 1~3)，因為我們有多個 Key，可以適當放寬一點點，但穩妥起見還是推薦 1
+        let concurrent_limit = self.config.threads_num.max(3); 
         
         let uploader = tokio::spawn(
             async move {
-                let imgbb = ImgBBUploader::new(&api_key);
                 let semaphore = Arc::new(Semaphore::new(concurrent_limit));
                 let mut join_set = JoinSet::new();
-                let mut processed_count = 0; // 记录成功处理（上传或跳过）的数量
+                let mut processed_count = 0; 
+                let mut key_index = 0; // 輪詢計數器
 
                 while let Some((page, (fileindex, url))) = rx.recv().await {
+                    // 【策略調整】有多個 Key 後，我們可以適當減少強制等待時間
+                    // 之前的 sleep(5) 可以降為 sleep(1) 或者直接去掉，取決於你有多少個 Key
+                    // 如果你有 3 個 Key，相當於冷卻時間變為 3 倍，所以這裡設為 1 秒即可
+                    tokio::time::sleep(Duration::from_secs(1)).await; 
+
                     let mut suffix = url.split('.').last().unwrap_or("jpg");
-                    
                     if suffix == "webp" { suffix = "jpg"; }
                     if suffix == "gif" { 
-                        // GIF 被判定为“已处理”（虽然是跳过），计数+1
                         processed_count += 1;
                         continue; 
                     } 
                     
                     let filename = format!("{}.{}", page.hash(), suffix);
                     
+                    // 【核心邏輯】輪流選取 Key
+                    let current_key = api_keys[key_index % api_keys.len()].clone();
+                    key_index += 1; // 下一張圖用下一個 Key
+
+                    // 動態創建帶有當前 Key 的上傳器
+                    let imgbb = ImgBBUploader::new(&current_key);
+                    
                     let permit = semaphore.clone().acquire_owned().await.unwrap();
                     let client_clone = http_client.clone();
-                    let imgbb_clone = imgbb.clone();
 
                     join_set.spawn(async move {
                         let mut success = false;
@@ -353,40 +370,45 @@ impl ExloliUploader {
                             match client_clone.get(&url).send().await {
                                 Ok(res) => {
                                     if let Ok(bytes) = res.bytes().await {
-                                        match imgbb_clone.upload_file(&filename, &bytes).await {
+                                        // 使用輪詢到的 Key 進行上傳
+                                        match imgbb.upload_file(&filename, &bytes).await {
                                             Ok(uploaded_url) => {
-                                                info!("已上傳至 ImgBB: {} -> {} (第 {} 次嘗試成功)", page.page(), uploaded_url, attempt);
+                                                info!("ImgBB 上傳成功 [Key尾號{}]: {} -> {}", 
+                                                    // 打印 Key 的最後幾位方便調試
+                                                    &imgbb.api_key.chars().last().unwrap_or('?'), 
+                                                    page.page(), 
+                                                    uploaded_url
+                                                );
                                                 let _ = ImageEntity::create(fileindex, page.hash(), &uploaded_url).await;
                                                 let _ = PageEntity::create(page.gallery_id(), page.page(), fileindex).await;
                                                 success = true;
                                                 break; 
                                             }
-                                            Err(err) => error!("圖片 {} 上傳 ImgBB 失敗 (嘗試 {}/3): {}", page.page(), attempt, err),
+                                            Err(err) => error!("ImgBB 上傳失敗 (嘗試 {}/3): {}", attempt, err),
                                         }
                                     }
                                 }
-                                Err(err) => error!("圖片 {} 從 E 站下載失敗 (嘗試 {}/3): {}", page.page(), attempt, err),
+                                Err(err) => error!("E 站下載失敗 (嘗試 {}/3): {}", attempt, err),
                             }
+                            // 失敗退避
                             if attempt < 3 { tokio::time::sleep(Duration::from_secs(3)).await; }
                         }
                         
-                        if !success { error!("🚨 圖片 {} 徹底上傳失敗，已放棄！", page.page()); }
+                        if !success { error!("🚨 圖片 {} 徹底上傳失敗", page.page()); }
                         
                         drop(permit);
-                        success // 返回本次任务是否成功
+                        success 
                     }.in_current_span());
                 }
                 
-                // 等待所有并发任务完成，并统计成功数
                 while let Some(res) = join_set.join_next().await {
                     match res {
-                        Ok(true) => processed_count += 1, // 任务成功，计数+1
-                        Ok(false) => {}, // 任务失败，不计数
-                        Err(e) => error!("並發任務執行異常: {}", e),
+                        Ok(true) => processed_count += 1,
+                        Ok(false) => {},
+                        Err(e) => error!("任務異常: {}", e),
                     }
                 }
                 
-                // 返回总处理成功数
                 Result::<usize>::Ok(processed_count)
             }
             .in_current_span(),
@@ -394,12 +416,11 @@ impl ExloliUploader {
 
         let (_, count) = tokio::try_join!(flatten(getter), flatten(uploader))?;
         
-        // 最终比对：成功处理数 是否等于 本次待处理总数
         if count == total_missing {
-            info!("本批次圖片處理完整 ({} / {})", count, total_missing);
+            info!("本批次處理完整 ({} / {})", count, total_missing);
             Ok(true)
         } else {
-            error!("本批次圖片處理不完整 ({} / {})，存在失敗項目", count, total_missing);
+            error!("本批次處理不完整 ({} / {})", count, total_missing);
             Ok(false)
         }
     }
