@@ -103,21 +103,34 @@ async fn callback_vote_for_poll(
     Ok(())
 }
 
-async fn callback_change_page(bot: Bot, query: CallbackQuery, callback: CallbackData, cfg: Config) -> Result<()> {
-    // ... 前面的代碼保持不變
+async fn callback_change_page(
+    bot: Bot,
+    query: CallbackQuery,
+    callback: CallbackData,
+    cfg: Config,
+) -> Result<()> {
+    // 這裡是你上次不小心刪掉的變量定義
+    let (from, to, offset) = match callback {
+        CallbackData::PrevPage(from, to, offset) => (from, to, offset - 1),
+        CallbackData::NextPage(from, to, offset) => (from, to, offset + 1),
+        _ => unreachable!(),
+    };
+    
     let text = cmd_best_text(from, to, offset, cfg.telegram.channel_id).await?;
     let keyboard = cmd_best_keyboard(from, to, offset);
 
-    // 🌟 永遠先消除按鈕加載狀態
+    // 🌟 先消除按鈕加載狀態
     let _ = bot.answer_callback_query(query.id.clone()).await; 
 
     if let Some(message) = query.message {
+        // 🌟 忽略錯誤，並補上 parse_mode
         let _ = bot.edit_message_text(message.chat.id, message.id, text)
             .reply_markup(keyboard)
             .disable_web_page_preview(true)
-            .parse_mode(ParseMode::Html) // 🌟 補上丟失的 HTML 聲明
+            .parse_mode(ParseMode::Html)
             .await;
     }
+
     Ok(())
 }
 
