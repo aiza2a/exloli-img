@@ -52,7 +52,7 @@ async fn callback_challenge(
         let result = if success { "答对了！" } else { "答错了……" };
         let artist = trans.trans_raw("artist", &answer);
         let url = gallery_entity.url().url();
-        let preview = link(&preview, &gallery_entity.title_jp.unwrap_or(gallery_entity.title));
+        let preview = link(&preview, &escape(&gallery_entity.title_jp.unwrap_or(gallery_entity.title)));
         let score = poll.score * 100.;
         let rank = poll.rank().await? * 100.;
 
@@ -103,27 +103,21 @@ async fn callback_vote_for_poll(
     Ok(())
 }
 
-async fn callback_change_page(
-    bot: Bot,
-    query: CallbackQuery,
-    callback: CallbackData,
-    cfg: Config,
-) -> Result<()> {
-    let (from, to, offset) = match callback {
-        CallbackData::PrevPage(from, to, offset) => (from, to, offset - 1),
-        CallbackData::NextPage(from, to, offset) => (from, to, offset + 1),
-        _ => unreachable!(),
-    };
+async fn callback_change_page(bot: Bot, query: CallbackQuery, callback: CallbackData, cfg: Config) -> Result<()> {
+    // ... 前面的代碼保持不變
     let text = cmd_best_text(from, to, offset, cfg.telegram.channel_id).await?;
     let keyboard = cmd_best_keyboard(from, to, offset);
 
+    // 🌟 永遠先消除按鈕加載狀態
+    let _ = bot.answer_callback_query(query.id.clone()).await; 
+
     if let Some(message) = query.message {
-        bot.edit_message_text(message.chat.id, message.id, text)
+        let _ = bot.edit_message_text(message.chat.id, message.id, text)
             .reply_markup(keyboard)
             .disable_web_page_preview(true)
-            .await?;
+            .parse_mode(ParseMode::Html) // 🌟 補上丟失的 HTML 聲明
+            .await;
     }
-
     Ok(())
 }
 
@@ -216,11 +210,15 @@ async fn callback_fav_page(bot: Bot, query: CallbackQuery, page: i32, cfg: Confi
     let count = crate::database::FavoriteEntity::count(user_id).await?;
     let keyboard = crate::bot::handlers::fav_keyboard(page, count);
     
-    bot.edit_message_text(message.chat.id, message.id, text)
+    // 🌟 先消除加載動畫
+    let _ = bot.answer_callback_query(query.id).await;
+    
+    // 🌟 忽略內容未修改引發的報錯
+    let _ = bot.edit_message_text(message.chat.id, message.id, text)
         .reply_markup(keyboard)
         .parse_mode(teloxide::types::ParseMode::Html)
         .disable_web_page_preview(true)
-        .await?;
-    bot.answer_callback_query(query.id).await?;
+        .await;
+        
     Ok(())
 }
