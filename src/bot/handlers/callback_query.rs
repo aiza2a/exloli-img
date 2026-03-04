@@ -22,6 +22,8 @@ pub fn callback_query_handler() -> Handler<'static, DependencyMap, Result<()>, D
         .branch(case![CallbackData::Challenge(id, artist)].endpoint(callback_challenge))
         .branch(case![CallbackData::RandomAnother(tags)].endpoint(callback_random_another)) 
         .endpoint(callback_change_page)
+        .branch(case![CallbackData::FavToggle(id)].endpoint(callback_fav_toggle))
+        .branch(case![CallbackData::FavPage(page)].endpoint(callback_fav_page))
 }
 
 async fn callback_challenge(
@@ -195,5 +197,30 @@ async fn callback_random_another(
                 .await?;
         }
     }
+    Ok(())
+}
+
+async fn callback_fav_toggle(bot: Bot, query: CallbackQuery, id: i32) -> Result<()> {
+    let user_id = query.from.id.0 as i64;
+    let added = crate::database::FavoriteEntity::toggle(user_id, id).await?;
+    let msg = if added { "⭐ 已加入個人收藏夾！" } else { "❌ 已從收藏夾移除！" };
+    bot.answer_callback_query(query.id).text(msg).show_alert(false).await?;
+    Ok(())
+}
+
+async fn callback_fav_page(bot: Bot, query: CallbackQuery, page: i32, cfg: Config) -> Result<()> {
+    let message = query.message.context("消息过旧")?;
+    let user_id = query.from.id.0 as i64;
+    
+    let text = crate::bot::handlers::fav_text(user_id, page, cfg.telegram.channel_id.clone()).await?;
+    let count = crate::database::FavoriteEntity::count(user_id).await?;
+    let keyboard = crate::bot::handlers::fav_keyboard(page, count);
+    
+    bot.edit_message_text(message.chat.id, message.id, text)
+        .reply_markup(keyboard)
+        .parse_mode(teloxide::types::ParseMode::Html)
+        .disable_web_page_preview(true)
+        .await?;
+    bot.answer_callback_query(query.id).await?;
     Ok(())
 }
