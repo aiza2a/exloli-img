@@ -97,20 +97,28 @@ impl GalleryEntity {
             .fetch_optional(&*DB).await
     }
 
-    pub async fn get_random_with_tags(tags: &[String]) -> Result<Option<Self>> {
+    pub async fn get_random_with_tags(tags_conditions: &[Vec<String>]) -> Result<Option<Self>> {
         let mut query = String::from("SELECT * FROM gallery WHERE deleted = FALSE");
-        // 擴大搜索範圍：同時匹配 標籤、原標題、日文/中文標題
-        for _ in tags {
-            query.push_str(" AND (title LIKE ? OR title_jp LIKE ? OR tags LIKE ?)");
+        
+        for condition in tags_conditions {
+            query.push_str(" AND (");
+            let mut parts = Vec::new();
+            for _ in condition {
+                parts.push("title LIKE ? OR title_jp LIKE ? OR tags LIKE ?");
+            }
+            query.push_str(&parts.join(" OR "));
+            query.push_str(")");
         }
         query.push_str(" ORDER BY RANDOM() LIMIT 1");
 
         let mut q = sqlx::query_as::<_, Self>(&query);
         
-        for tag in tags {
-            let like_str = format!("%{}%", tag);
-            // 因為有 3 個問號，所以需要綁定 3 次
-            q = q.bind(like_str.clone()).bind(like_str.clone()).bind(like_str); 
+        // 綁定所有中英標籤變量
+        for condition in tags_conditions {
+            for tag in condition {
+                let like_str = format!("%{}%", tag);
+                q = q.bind(like_str.clone()).bind(like_str.clone()).bind(like_str); 
+            }
         }
         q.fetch_optional(&*DB).await
     }
