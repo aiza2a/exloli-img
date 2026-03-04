@@ -63,7 +63,12 @@ pub fn url_of(channel: Recipient, id: i32) -> Url {
     }
 }
 
-pub fn poll_keyboard(poll_id: i64, votes: &[i32; 5], gallery_id: i32) -> InlineKeyboardMarkup {
+pub fn poll_keyboard(
+    poll_id: i64,
+    votes: &[i32; 5],
+    gallery_id: i32,
+    fav_count: i32, 
+) -> InlineKeyboardMarkup {
     let sum = votes.iter().sum::<i32>();
     let votes: Box<dyn Iterator<Item = f32>> = if sum == 0 {
         Box::new([0.].iter().cloned().cycle())
@@ -71,7 +76,11 @@ pub fn poll_keyboard(poll_id: i64, votes: &[i32; 5], gallery_id: i32) -> InlineK
         Box::new(votes.iter().map(|&i| i as f32 / sum as f32 * 100.))
     };
 
-    let mut options = ["我瞎了", "不咋样", "还行吧", "不错哦", "太棒了"]
+    // 🌟 帶人數的動態文字
+    let fav_text = if fav_count > 0 { format!("⭐ 收藏本檔案 ({})", fav_count) } else { "⭐ 收藏本檔案".to_string() };
+    let collect_btn_row = vec![InlineKeyboardButton::callback(fav_text, CallbackData::FavToggle(gallery_id).pack())];
+
+    let rating_rows = ["我瞎了", "不咋样", "还行吧", "不错哦", "太棒了"]
         .iter()
         .zip(votes)
         .enumerate()
@@ -85,13 +94,11 @@ pub fn poll_keyboard(poll_id: i64, votes: &[i32; 5], gallery_id: i32) -> InlineK
         })
         .collect::<Vec<_>>();
 
-    // 🌟 將收藏按鈕追加到投票鍵盤的底部
-    options.push(vec![InlineKeyboardButton::callback(
-        "⭐ 收藏本檔案",
-        CallbackData::FavToggle(gallery_id).pack(),
-    )]);
+    // 🌟 把收藏按鈕放在最上面
+    let mut final_matrix = vec![collect_btn_row];
+    final_matrix.extend(rating_rows);
 
-    InlineKeyboardMarkup::new(options)
+    InlineKeyboardMarkup::new(final_matrix)
 }
 
 pub async fn gallery_preview_url(channel_id: Recipient, gallery_id: i32) -> Result<String> {
