@@ -15,6 +15,7 @@ use tracing::{debug, error, info, Instrument};
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
+use teloxide::utils::html::escape;
 
 use crate::bot::Bot;
 use crate::config::Config;
@@ -479,7 +480,7 @@ impl ExloliUploader {
         let re = Regex::new("[-/· ]").unwrap();
         let tags = self.trans.trans_tags(gallery.tags());
         let mut text = String::new();
-        text.push_str(&format!("<b>{}</b>\n\n", gallery.title_jp()));
+        text.push_str(&format!("<b>{}</b>\n\n", escape(&gallery.title_jp())));
         for (ns, tag) in tags {
             let tag = tag
                 .iter()
