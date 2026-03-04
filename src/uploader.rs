@@ -127,7 +127,7 @@ impl ExloliUploader {
 
         // 🌟 構建收藏鍵盤
         // 🌟 1. 新增：為更新的消息也構建帶人數的收藏鍵盤
-        let target_id = current_gallery_data.url.id();
+        let target_id = gallery_data.url.id();
         let fav_count = FavoriteEntity::count_by_gallery(target_id).await.unwrap_or(0);
         let fav_text = if fav_count > 0 { format!("⭐ 收藏 ({})", fav_count) } else { "⭐ 收藏".to_string() };
         let fav_kb = InlineKeyboardMarkup::new(vec![vec![
