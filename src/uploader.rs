@@ -126,8 +126,8 @@ impl ExloliUploader {
             .await?;
 
         // 🌟 構建收藏鍵盤
-        let target_id = gallery_data.url.id(); // try_update 裡是 current_gallery_data.url.id()，republish 裡是 gallery.id
-        
+        // 🌟 1. 新增：為更新的消息也構建帶人數的收藏鍵盤
+        let target_id = current_gallery_data.url.id();
         let fav_count = FavoriteEntity::count_by_gallery(target_id).await.unwrap_or(0);
         let fav_text = if fav_count > 0 { format!("⭐ 收藏 ({})", fav_count) } else { "⭐ 收藏".to_string() };
         let fav_kb = InlineKeyboardMarkup::new(vec![vec![
@@ -205,8 +205,11 @@ impl ExloliUploader {
                 .await?;
 
             // 🌟 1. 新增：為更新的消息也構建收藏鍵盤
+            let target_id = current_gallery_data.url.id();
+            let fav_count = FavoriteEntity::count_by_gallery(target_id).await.unwrap_or(0);
+            let fav_text = if fav_count > 0 { format!("⭐ 收藏 ({})", fav_count) } else { "⭐ 收藏".to_string() };
             let fav_kb = InlineKeyboardMarkup::new(vec![vec![
-                InlineKeyboardButton::callback("⭐ 收藏", CallbackData::FavToggle(current_gallery_data.url.id()).pack())
+                InlineKeyboardButton::callback(fav_text, CallbackData::FavToggle(target_id).pack())
             ]]);
                 
             let edit_res = self.bot
@@ -248,7 +251,7 @@ impl ExloliUploader {
             .await?;
 
         // 🌟 1. 新增：為重新發布的消息也構建收藏鍵盤
-        let target_id = gallery_data.url.id(); // try_update 裡是 current_gallery_data.url.id()，republish 裡是 gallery.id
+        let target_id = gallery.id;
         
         let fav_count = FavoriteEntity::count_by_gallery(target_id).await.unwrap_or(0);
         let fav_text = if fav_count > 0 { format!("⭐ 收藏 ({})", fav_count) } else { "⭐ 收藏".to_string() };
