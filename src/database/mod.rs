@@ -1,3 +1,5 @@
+pub mod favorite;
+pub use favorite::*;
 mod challenge;
 mod db;
 mod gallery;
