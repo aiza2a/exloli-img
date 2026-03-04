@@ -10,7 +10,7 @@ use crate::bot::handlers::{cmd_best_keyboard, cmd_best_text, poll_keyboard};
 use crate::bot::utils::{CallbackData, ChallengeLocker, RateLimiter};
 use crate::bot::Bot;
 use crate::config::Config;
-use crate::database::{ChallengeHistory, GalleryEntity, PollEntity, VoteEntity};
+use crate::database::{ChallengeHistory, GalleryEntity, PollEntity, VoteEntity, ImageEntity};
 use crate::ehentai::GalleryInfo;
 use crate::tags::EhTagTransDB;
 
@@ -155,7 +155,7 @@ async fn callback_random_another(
             
             let text = format!(
                 "🎲 <b>隨機抽取結果</b>\n\n<b>{}</b>\n\n📄 <b>預覽：</b>{}\n🔗 <b>地址：</b>{}\n⭐️ <b>評分：</b>{:.2}（{:.2}%）",
-                gallery.title_jp.unwrap_or(gallery.title),
+                gallery.title_jp.as_ref().unwrap_or(&gallery.title),
                 preview,
                 url,
                 score,
@@ -166,17 +166,24 @@ async fn callback_random_another(
                 teloxide::types::InlineKeyboardButton::callback("🎲 再來一個本子", CallbackData::RandomAnother(tags_str).pack()),
             ]]);
 
-            // 推送一本新的
-            bot.send_message(message.chat.id, text)
-                .reply_markup(keyboard)
-                .await?;
+            // 🌟核心修復：發送帶封面的圖片消息
+            let images = ImageEntity::get_by_gallery_id(gallery.id).await?;
+            if let Some(img) = images.first() {
+                bot.send_photo(message.chat.id, InputFile::url(img.url().parse()?))
+                    .caption(&text)
+                    .reply_markup(keyboard)
+                    .await?;
+            } else {
+                bot.send_message(message.chat.id, &text)
+                    .reply_markup(keyboard)
+                    .await?;
+            }
             
-            // 回答 callback 以消除按钮上的转圈动画
             bot.answer_callback_query(query.id).await?;
         }
         None => {
             bot.answer_callback_query(query.id)
-                .text("沒有找到更多匹配的本子了，請換個標籤試試")
+                .text("沒有找到更多匹配的本子了，請換個關鍵詞試試")
                 .show_alert(true)
                 .await?;
         }
