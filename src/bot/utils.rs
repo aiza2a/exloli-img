@@ -36,6 +36,8 @@ pub enum CallbackData {
     Challenge(i64, String),
     /// 随机再来一本，附带之前的搜索标签
     RandomAnother(String),
+    FavToggle(i32),
+    FavPage(i32),
 }
 
 impl CallbackData {
@@ -45,6 +47,8 @@ impl CallbackData {
             Self::NextPage(a, b, c) => format!("> {} {} {}", a, b, c),
             Self::PrevPage(a, b, c) => format!("< {} {} {}", a, b, c),
             Self::Challenge(a, b) => format!("challenge {}:{}", a, b),
+            Self::FavToggle(id) => format!("fav_t {}", id),
+            Self::FavPage(p) => format!("fav_p {}", p),
             Self::RandomAnother(tags) => {
                 if tags.is_empty() { 
                     "random".to_string() 
@@ -76,7 +80,8 @@ impl CallbackData {
                 let (a, b) = data.split_once(':')?;
                 Some(Self::Challenge(a.parse().ok()?, b.to_string()))
             }
-            // 新增 unpack 邏輯
+            "fav_t" => Some(Self::FavToggle(data.parse().ok()?)),
+            "fav_p" => Some(Self::FavPage(data.parse().ok()?)),
             "random" => Some(Self::RandomAnother(data.to_string())),
             _ => None,
         }
