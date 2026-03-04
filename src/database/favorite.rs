@@ -27,7 +27,7 @@ impl FavoriteEntity {
         struct Row { id: i32, title: String, score: f64 }
 
         let records = sqlx::query_as::<_, Row>(
-            r#"SELECT gallery.id, COALESCE(gallery.title_jp, gallery.title) as title, IFNULL(poll.score, 0) as score
+            r#"SELECT gallery.id, COALESCE(gallery.title_jp, gallery.title) as title, IFNULL(poll.score, 0.0) as score
             FROM favorite
             JOIN gallery ON favorite.gallery_id = gallery.id
             LEFT JOIN poll ON favorite.gallery_id = poll.gallery_id
