@@ -14,7 +14,7 @@ use crate::bot::utils::CallbackData;
 
 use crate::bot::command::{AdminCommand, PublicCommand};
 use crate::bot::handlers::{
-    cmd_best_keyboard, cmd_best_text, cmd_challenge_keyboard, gallery_preview_url,
+    cmd_best_keyboard, cmd_best_text, cmd_challenge_keyboard, gallery_preview_url, fav_text, fav_keyboard
 };
 use crate::bot::scheduler::Scheduler;
 use crate::bot::utils::{ChallengeLocker, ChallengeProvider};
@@ -40,6 +40,7 @@ pub fn public_command_handler(
         .branch(case![PublicCommand::Random(args)].endpoint(cmd_random))
         .branch(case![PublicCommand::Stats].endpoint(cmd_stats))
         .branch(case![PublicCommand::Help].endpoint(cmd_help))
+        .branch(case![PublicCommand::Fav].endpoint(cmd_fav))
 }
 
 async fn cmd_help(bot: Bot, msg: Message) -> Result<()> {
@@ -304,17 +305,21 @@ async fn cmd_random(bot: Bot, msg: Message, cfg: Config, trans: EhTagTransDB, ar
                     rank
                 );
 
-                let keyboard = if i == count - 1 {
+                // 🌟 為抽出來的每本本子加上收藏按鈕
+                let fav_btn = InlineKeyboardButton::callback("⭐ 收藏", CallbackData::FavToggle(gallery.id).pack());
+                let mut keyboard_rows = vec![];
+                
+                if i == count - 1 {
                     let mut tags_str = tags.join(" ");
-                    if tags_str.len() > 40 { 
-                        tags_str = tags_str.chars().take(12).collect(); 
-                    }
-                    Some(InlineKeyboardMarkup::new(vec![vec![
+                    if tags_str.len() > 40 { tags_str = tags_str.chars().take(12).collect(); }
+                    keyboard_rows.push(vec![
                         InlineKeyboardButton::callback("🎲 再來一個本子", CallbackData::RandomAnother(tags_str).pack()),
-                    ]]))
+                        fav_btn // 與再來一本並排
+                    ]);
                 } else {
-                    None
-                };
+                    keyboard_rows.push(vec![fav_btn]); // 單獨的收藏按鈕
+                }
+                let keyboard = Some(InlineKeyboardMarkup::new(keyboard_rows));
 
                 let images = ImageEntity::get_by_gallery_id(gallery.id).await?;
                 if let Some(img) = images.first() {
@@ -365,5 +370,21 @@ async fn cmd_stats(bot: Bot, msg: Message) -> Result<()> {
     );
 
     reply_to!(bot, msg, text).await?;
+    Ok(())
+}
+
+async fn cmd_fav(bot: Bot, msg: Message, cfg: Config) -> Result<()> {
+    info!("{}: /fav", msg.from().unwrap().id);
+    let user_id = msg.from().unwrap().id.0 as i64;
+    
+    let text = fav_text(user_id, 0, cfg.telegram.channel_id.clone()).await?;
+    let count = crate::database::FavoriteEntity::count(user_id).await?;
+    let keyboard = fav_keyboard(0, count);
+    
+    reply_to!(bot, msg, text)
+        .reply_markup(keyboard)
+        .parse_mode(ParseMode::Html)
+        .disable_web_page_preview(true)
+        .await?;
     Ok(())
 }
