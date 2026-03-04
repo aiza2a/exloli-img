@@ -44,4 +44,10 @@ impl FavoriteEntity {
             .bind(user_id).fetch_one(&*DB).await?;
         Ok(res.0 as i32)
     }
+    // 🌟 獲取特定畫廊的收藏總數
+    pub async fn count_by_gallery(gallery_id: i32) -> Result<i32> {
+        let res: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM favorite WHERE gallery_id = ?")
+            .bind(gallery_id).fetch_one(&*DB).await?;
+        Ok(res.0 as i32)
+    }
 }
