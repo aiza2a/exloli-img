@@ -98,17 +98,19 @@ impl GalleryEntity {
     }
 
     pub async fn get_random_with_tags(tags: &[String]) -> Result<Option<Self>> {
-        // 動態構建 SQL：每個標籤都必須包含在 JSON 字符串中
         let mut query = String::from("SELECT * FROM gallery WHERE deleted = FALSE");
+        // 擴大搜索範圍：同時匹配 標籤、原標題、日文/中文標題
         for _ in tags {
-            query.push_str(" AND tags LIKE ?");
+            query.push_str(" AND (title LIKE ? OR title_jp LIKE ? OR tags LIKE ?)");
         }
         query.push_str(" ORDER BY RANDOM() LIMIT 1");
 
         let mut q = sqlx::query_as::<_, Self>(&query);
-        // 綁定模糊查詢的變量
+        
         for tag in tags {
-            q = q.bind(format!("%{}%", tag)); 
+            let like_str = format!("%{}%", tag);
+            // 因為有 3 個問號，所以需要綁定 3 次
+            q = q.bind(like_str.clone()).bind(like_str.clone()).bind(like_str); 
         }
         q.fetch_optional(&*DB).await
     }
