@@ -63,7 +63,7 @@ pub fn url_of(channel: Recipient, id: i32) -> Url {
     }
 }
 
-pub fn poll_keyboard(poll_id: i64, votes: &[i32; 5]) -> InlineKeyboardMarkup {
+pub fn poll_keyboard(poll_id: i64, votes: &[i32; 5], gallery_id: i32) -> InlineKeyboardMarkup {
     let sum = votes.iter().sum::<i32>();
     let votes: Box<dyn Iterator<Item = f32>> = if sum == 0 {
         Box::new([0.].iter().cloned().cycle())
@@ -71,7 +71,7 @@ pub fn poll_keyboard(poll_id: i64, votes: &[i32; 5]) -> InlineKeyboardMarkup {
         Box::new(votes.iter().map(|&i| i as f32 / sum as f32 * 100.))
     };
 
-    let options = ["我瞎了", "不咋样", "还行吧", "不错哦", "太棒了"]
+    let mut options = ["我瞎了", "不咋样", "还行吧", "不错哦", "太棒了"]
         .iter()
         .zip(votes)
         .enumerate()
@@ -84,6 +84,12 @@ pub fn poll_keyboard(poll_id: i64, votes: &[i32; 5]) -> InlineKeyboardMarkup {
             )]
         })
         .collect::<Vec<_>>();
+
+    // 🌟 將收藏按鈕追加到投票鍵盤的底部
+    options.push(vec![InlineKeyboardButton::callback(
+        "⭐ 收藏本檔案",
+        CallbackData::FavToggle(gallery_id).pack(),
+    )]);
 
     InlineKeyboardMarkup::new(options)
 }
