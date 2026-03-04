@@ -1,127 +1,204 @@
-use anyhow::{anyhow, Result};
-use chrono::{Duration, Utc};
-use reqwest::Url;
+use std::collections::VecDeque;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use anyhow::Result;
+use dashmap::DashMap;
+use image::EncodableLayout;
+use once_cell::sync::Lazy;
+use reqwest::header::USER_AGENT;
+use serde::{Deserialize, Serialize};
 use teloxide::prelude::*;
-use teloxide::types::{
-    InlineKeyboardButton, InlineKeyboardButtonKind, InlineKeyboardMarkup, MessageId, Recipient,
-};
-use teloxide::utils::html::{escape, link};
+use tokio::sync::mpsc::{channel, Receiver};
+use tokio::sync::Mutex;
+use tokio::time::sleep;
+use tracing::{info, warn};
 
-use crate::bot::utils::CallbackData;
-use crate::database::{ChallengeView, GalleryEntity, MessageEntity, TelegraphEntity, FavoriteEntity};
-use crate::tags::EhTagTransDB;
+use crate::database::ChallengeView;
 
-pub fn cmd_challenge_keyboard(
-    id: i64,
-    challenge: &[ChallengeView],
-    trans: &EhTagTransDB,
-) -> InlineKeyboardMarkup {
-    InlineKeyboardMarkup::new(challenge.iter().map(|g| {
-        vec![InlineKeyboardButton::callback(
-            format!("{}（{}）", trans.trans_raw("artist", &g.artist), &g.artist),
-            CallbackData::Challenge(id, g.artist.clone()).pack(),
-        )]
-    }))
+// 新增静态客户端
+static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .unwrap()
+});
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum CallbackData {
+    VoteForPoll(i64, i32),
+    NextPage(i32, i32, i32),
+    PrevPage(i32, i32, i32),
+    Challenge(i64, String),
+    RandomAnother(String),
+    FavToggle(i32),
+    FavPage(i32),
 }
 
-pub async fn cmd_best_text(
-    day_a: i32,
-    day_b: i32,
-    offset: i32,
-    channel: Recipient,
-) -> Result<String> {
-    let max_days = day_a.max(day_b);
-    let min_days = day_a.min(day_b);
-
-    let from_date = Utc::now().date_naive() - Duration::days(max_days as i64);
-    let to_date = Utc::now().date_naive() - Duration::days(min_days as i64);
-
-    let mut text = format!("最近 {} ~ {} 天的本子排名（{}）", min_days, max_days, offset);
-
-    for (score, title, gid) in GalleryEntity::list(from_date, to_date, 20, offset).await? {
-        let url = gallery_preview_url(channel.clone(), gid).await?;
-        // 🌟 加上了 escape(&title) 避免崩潰
-        text.push_str(&format!("\n<code>{:.2}</code> - {}", score * 100., link(&url, &escape(&title))));
+impl CallbackData {
+    pub fn pack(&self) -> String {
+        match self {
+            Self::VoteForPoll(a, b) => format!("vote {} {}", a, b),
+            Self::NextPage(a, b, c) => format!("> {} {} {}", a, b, c),
+            Self::PrevPage(a, b, c) => format!("< {} {} {}", a, b, c),
+            Self::Challenge(a, b) => format!("challenge {}:{}", a, b),
+            Self::FavToggle(id) => format!("fav_t {}", id),
+            Self::FavPage(p) => format!("fav_p {}", p),
+            Self::RandomAnother(tags) => {
+                if tags.is_empty() { 
+                    "random".to_string() 
+                } else { 
+                    format!("random {}", tags) 
+                }
+            }
+        }
     }
 
-    Ok(text)
-}
-
-pub fn cmd_best_keyboard(from: i32, to: i32, offset: i32) -> InlineKeyboardMarkup {
-    InlineKeyboardMarkup::new(vec![vec![
-        InlineKeyboardButton::callback("<", CallbackData::PrevPage(from, to, offset).pack()),
-        InlineKeyboardButton::callback(">", CallbackData::NextPage(from, to, offset).pack()),
-    ]])
-}
-
-pub fn url_of(channel: Recipient, id: i32) -> Url {
-    match channel {
-        Recipient::Id(chat_id) => Message::url_of(chat_id, None, MessageId(id)).unwrap(),
-        Recipient::ChannelUsername(username) => {
-            Message::url_of(ChatId(-1000000000000), Some(&username[1..]), MessageId(id)).unwrap()
+    pub fn unpack(s: &str) -> Option<Self> {
+        let (cmd, data) = s.split_once(' ').unwrap_or((s, ""));
+        match cmd {
+            "vote" => {
+                let (a, b) = data.split_once(' ')?;
+                Some(Self::VoteForPoll(a.parse().ok()?, b.parse().ok()?))
+            }
+            ">" => {
+                let (a, data) = data.split_once(' ')?;
+                let (b, c) = data.split_once(' ')?;
+                Some(Self::NextPage(a.parse().ok()?, b.parse().ok()?, c.parse().ok()?))
+            }
+            "<" => {
+                let (a, data) = data.split_once(' ')?;
+                let (b, c) = data.split_once(' ')?;
+                Some(Self::PrevPage(a.parse().ok()?, b.parse().ok()?, c.parse().ok()?))
+            }
+            "challenge" => {
+                let (a, b) = data.split_once(':')?;
+                Some(Self::Challenge(a.parse().ok()?, b.to_string()))
+            }
+            "fav_t" => Some(Self::FavToggle(data.parse().ok()?)),
+            "fav_p" => Some(Self::FavPage(data.parse().ok()?)),
+            "random" => Some(Self::RandomAnother(data.to_string())),
+            _ => None,
         }
     }
 }
 
-pub fn poll_keyboard(poll_id: i64, votes: &[i32; 5]) -> InlineKeyboardMarkup {
-    let sum = votes.iter().sum::<i32>();
-    let votes: Box<dyn Iterator<Item = f32>> = if sum == 0 {
-        Box::new([0.].iter().cloned().cycle())
-    } else {
-        Box::new(votes.iter().map(|&i| i as f32 / sum as f32 * 100.))
-    };
+#[derive(Debug, Clone)]
+pub struct RateLimiter(Arc<RateLimiterInner>);
 
-    let options = ["我瞎了", "不咋样", "还行吧", "不错哦", "太棒了"]
-        .iter()
-        .zip(votes)
-        .enumerate()
-        .map(|(idx, (name, vote))| {
-            vec![InlineKeyboardButton::new(
-                format!("{:.0}% {}", vote, name),
-                InlineKeyboardButtonKind::CallbackData(
-                    CallbackData::VoteForPoll(poll_id, (idx + 1) as i32).pack(),
-                ),
-            )]
-        })
-        .collect::<Vec<_>>();
-
-    InlineKeyboardMarkup::new(options)
+#[derive(Debug)]
+struct RateLimiterInner {
+    interval: std::time::Duration,
+    limit: usize,
+    data: DashMap<UserId, VecDeque<Instant>>,
 }
 
-pub async fn gallery_preview_url(channel_id: Recipient, gallery_id: i32) -> Result<String> {
-    if let Some(msg) = MessageEntity::get_by_gallery(gallery_id).await? {
-        return Ok(url_of(channel_id, msg.id).to_string());
+impl RateLimiter {
+    pub fn new(interval: std::time::Duration, limit: usize) -> Self {
+        assert_ne!(limit, 0);
+        Self(Arc::new(RateLimiterInner {
+            interval,
+            limit,
+            data: Default::default(),
+        }))
     }
-    if let Some(telehraph) = TelegraphEntity::get(gallery_id).await? {
-        return Ok(telehraph.url);
+
+    pub fn insert(&self, key: UserId) -> Option<std::time::Duration> {
+        let mut entry = self.0.data.entry(key).or_default();
+        let entry = entry.value_mut();
+        while let Some(first) = entry.front() {
+            if first.elapsed() > self.0.interval {
+                entry.pop_front();
+            } else {
+                break;
+            }
+        }
+        if entry.len() == self.0.limit {
+            return entry.front().cloned().map(|d| self.0.interval - d.elapsed());
+        }
+        entry.push_back(Instant::now());
+        None
     }
-    Err(anyhow!("找不到画廊"))
 }
 
-pub async fn fav_text(user_id: i64, page: i32, channel: Recipient) -> Result<String> {
-    let limit = 15;
-    let count = FavoriteEntity::count(user_id).await?;
-    if count == 0 {
-        return Ok("<b>📚 您的個人收藏夾</b>\n\n您目前還沒有收藏任何檔案哦！\n點擊畫廊底部的 <b>[⭐ 收藏]</b> 按鈕即可加入。".to_string());
-    }
-    
-    let total_pages = (count + limit - 1) / limit;
-    let current_page = page.clamp(0, total_pages - 1);
-    let mut text = format!("📚 <b>您的個人收藏夾</b> (第 {}/{} 頁，共 {} 本)\n\n", current_page + 1, total_pages, count);
+#[derive(Debug, Clone)]
+pub struct ChallengeLocker(Arc<DashMap<i64, (i32, i32, String)>>);
 
-    let list = FavoriteEntity::list(user_id, limit, current_page).await?;
-    for (gid, title, score) in list {
-        let url = gallery_preview_url(channel.clone(), gid).await?;
-        text.push_str(&format!("<code>{:.2}</code> - {}\n", score * 100., link(&url, &escape(&title))));
+impl ChallengeLocker {
+    pub fn new() -> Self {
+        Self(Arc::new(Default::default()))
     }
-    Ok(text)
+
+    pub fn add_challenge(&self, gallery: i32, page: i32, artist: String) -> i64 {
+        let key = rand::random::<i64>();
+        self.0.insert(key, (gallery, page, artist));
+        key
+    }
+
+    pub fn get_challenge(&self, id: i64) -> Option<(i32, i32, String)> {
+        Some(self.0.remove(&id)?.1)
+    }
 }
 
-pub fn fav_keyboard(page: i32, total: i32) -> InlineKeyboardMarkup {
-    let limit = 15;
-    let total_pages = (total + limit - 1) / limit;
-    let mut row = vec![];
-    if page > 0 { row.push(InlineKeyboardButton::callback("<", CallbackData::FavPage(page - 1).pack())); }
-    if page < total_pages - 1 { row.push(InlineKeyboardButton::callback(">", CallbackData::FavPage(page + 1).pack())); }
-    InlineKeyboardMarkup::new(if row.is_empty() { vec![] } else { vec![row] })
+#[derive(Debug, Clone)]
+pub struct ChallengeProvider(Arc<Mutex<Receiver<Vec<ChallengeView>>>>);
+
+impl ChallengeProvider {
+    pub fn new() -> Self {
+        let (tx, rx) = channel(5);
+        tokio::spawn(async move {
+            loop {
+                match Self::_get_challenge().await {
+                    Ok(challenge) => {
+                        if tx.send(challenge).await.is_err() {
+                            warn!("ChallengeProvider channel closed");
+                            break;
+                        }
+                    }
+                    Err(e) => warn!("获取挑战失败: {}", e),
+                }
+            }
+        });
+        Self(Arc::new(Mutex::new(rx)))
+    }
+
+    async fn _get_challenge() -> Result<Vec<ChallengeView>> {
+        loop {
+            let challenge = ChallengeView::get_random().await?;
+            if challenge.is_empty() {
+                sleep(Duration::from_secs(5)).await;
+                continue;
+            }
+            let answer = &challenge[0];
+            let url = if answer.url.starts_with("https://") {
+                answer.url.clone()
+            } else {
+                format!("https://telegra.ph{}", answer.url)
+            };
+
+            let resp = HTTP_CLIENT
+                .get(&url)
+                .header(USER_AGENT, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
+                .send()
+                .await?;
+
+            let data = resp.bytes().await?;
+            if has_qrcode(&data)? {
+                info!("跳过包含二维码的图片");
+                continue;
+            }
+            return Ok(challenge);
+        }
+    }
+
+    pub async fn get_challenge(&self) -> Option<Vec<ChallengeView>> {
+        self.0.lock().await.recv().await
+    }
+}
+
+pub fn has_qrcode(data: &[u8]) -> Result<bool> {
+    let image = image::load_from_memory(data)?.into_luma8();
+    let mut decoder = quircs::Quirc::default();
+    let codes = decoder.identify(image.width() as usize, image.height() as usize, image.as_bytes());
+    Ok(codes.count() > 0)
 }
