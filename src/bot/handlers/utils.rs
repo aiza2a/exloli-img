@@ -5,7 +5,7 @@ use teloxide::prelude::*;
 use teloxide::types::{
     InlineKeyboardButton, InlineKeyboardButtonKind, InlineKeyboardMarkup, MessageId, Recipient,
 };
-use teloxide::utils::html::link;
+use teloxide::utils::html::{escape, link};
 
 use crate::bot::utils::CallbackData;
 use crate::database::{ChallengeView, GalleryEntity, MessageEntity, TelegraphEntity};
@@ -98,4 +98,31 @@ pub async fn gallery_preview_url(channel_id: Recipient, gallery_id: i32) -> Resu
         return Ok(telehraph.url);
     }
     Err(anyhow!("找不到画廊"))
+}
+pub async fn fav_text(user_id: i64, page: i32, channel: Recipient) -> Result<String> {
+    let limit = 15;
+    let count = FavoriteEntity::count(user_id).await?;
+    if count == 0 {
+        return Ok("<b>📚 您的個人收藏夾</b>\n\n您目前還沒有收藏任何檔案哦！\n點擊畫廊底部的 <b>[⭐ 收藏]</b> 按鈕即可加入。".to_string());
+    }
+    
+    let total_pages = (count + limit - 1) / limit;
+    let current_page = page.clamp(0, total_pages - 1);
+    let mut text = format!("📚 <b>您的個人收藏夾</b> (第 {}/{} 頁，共 {} 本)\n\n", current_page + 1, total_pages, count);
+
+    let list = FavoriteEntity::list(user_id, limit, current_page).await?;
+    for (gid, title, score) in list {
+        let url = gallery_preview_url(channel.clone(), gid).await?;
+        text.push_str(&format!("<code>{:.2}</code> - {}\n", score * 100., link(&url, &escape(&title))));
+    }
+    Ok(text)
+}
+
+pub fn fav_keyboard(page: i32, total: i32) -> InlineKeyboardMarkup {
+    let limit = 15;
+    let total_pages = (total + limit - 1) / limit;
+    let mut row = vec![];
+    if page > 0 { row.push(InlineKeyboardButton::callback("<", CallbackData::FavPage(page - 1).pack())); }
+    if page < total_pages - 1 { row.push(InlineKeyboardButton::callback(">", CallbackData::FavPage(page + 1).pack())); }
+    InlineKeyboardMarkup::new(if row.is_empty() { vec![] } else { vec![row] })
 }
