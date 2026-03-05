@@ -52,6 +52,8 @@ impl ChallengeView {
                         SELECT image_id FROM page GROUP BY gallery_id HAVING page = MAX(page)
                         UNION
                         SELECT image_id FROM page GROUP BY gallery_id HAVING page = 1
+                        UNION
+                        SELECT id FROM image WHERE hash IN (SELECT hash FROM bad_image)
                     ) ORDER BY random() LIMIT 500 -- 限制结果数量来提高速度，500 个结果一般能凑齐 4 个作者了
                 ) GROUP BY artist
             ) ORDER BY random() LIMIT 4"#,
