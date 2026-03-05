@@ -356,6 +356,8 @@ impl ExloliUploader {
             
         // 併發限制：建議保持較低 (如 1~3)
         let concurrent_limit = self.config.threads_num.max(3); 
+        // 🌟 新增：獲取畫廊的總頁數，用於計算廣告高危區
+        let total_pages = gallery.pages.len() as i32;
         
         let uploader = tokio::spawn(
             async move {
@@ -392,7 +394,11 @@ impl ExloliUploader {
                             match client_clone.get(&url).send().await {
                                 Ok(res) => {
                                     if let Ok(bytes) = res.bytes().await {
-                                        if crate::bot::utils::has_qrcode(&bytes).unwrap_or(false) {
+                                        // 🌟 2. 優化：只掃描前 3 頁和最後 10 頁，節省 CPU 算力
+                                        let p = page.page();
+                                        let should_scan = p >= total_pages - 8;
+
+                                        if should_scan && crate::bot::utils::has_qrcode(&bytes).unwrap_or(false) {
                                             info!("🚨 檢測到廣告/招募圖 (包含二維碼)，自動攔截：{}", page.hash());
                                             let _ = crate::database::BadImageEntity::mark(page.hash(), 2).await;
                                             success = true; // 標記為 true 以通過總數校驗，但絕不上傳到 ImgBB
