@@ -308,6 +308,11 @@ impl ExloliUploader {
     async fn upload_gallery_image(&self, gallery: &EhGallery) -> Result<bool> {
         let mut pages = vec![];
         for page in &gallery.pages {
+            // 🌟 1. 攔截已知廣告圖：直接當作空氣跳過
+            if crate::database::BadImageEntity::is_bad(page.hash()).await.unwrap_or(None) == Some(2) {
+                info!("跳過已知廣告圖：{}", page.hash());
+                continue; 
+            }
             match ImageEntity::get_by_hash(page.hash()).await? {
                 Some(img) => {
                     PageEntity::create(page.gallery_id(), page.page(), img.id).await?;
@@ -387,6 +392,12 @@ impl ExloliUploader {
                             match client_clone.get(&url).send().await {
                                 Ok(res) => {
                                     if let Ok(bytes) = res.bytes().await {
+                                        if crate::bot::utils::has_qrcode(&bytes).unwrap_or(false) {
+                                            info!("🚨 檢測到廣告/招募圖 (包含二維碼)，自動攔截：{}", page.hash());
+                                            let _ = crate::database::BadImageEntity::mark(page.hash(), 2).await;
+                                            success = true; // 標記為 true 以通過總數校驗，但絕不上傳到 ImgBB
+                                            break; 
+                                        }
                                         // 使用輪詢到的 Key 進行上傳
                                         match imgbb.upload_file(&filename, &bytes).await {
                                             Ok(uploaded_url) => {
