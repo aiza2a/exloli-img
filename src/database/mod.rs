@@ -1,5 +1,7 @@
 pub mod favorite;
 pub use favorite::*;
+pub mod bad_image;
+pub use bad_image::*;
 mod challenge;
 mod db;
 mod gallery;
