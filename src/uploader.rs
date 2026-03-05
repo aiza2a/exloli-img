@@ -16,13 +16,11 @@ use std::sync::Arc;
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use teloxide::utils::html::escape;
-use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
-use crate::bot::utils::CallbackData;
 
 use crate::bot::Bot;
 use crate::config::Config;
 use crate::database::{
-    GalleryEntity, ImageEntity, MessageEntity, PageEntity, PollEntity, TelegraphEntity, FavoriteEntity
+    GalleryEntity, ImageEntity, MessageEntity, PageEntity, PollEntity, TelegraphEntity
 };
 use crate::ehentai::{EhClient, EhGallery, EhGalleryUrl, GalleryInfo};
 use crate::imgbb::ImgBBUploader;
@@ -125,34 +123,22 @@ impl ExloliUploader {
             .create_message_text(&gallery_data, &article.url)
             .await?;
 
-        // 🌟 構建收藏鍵盤
-        // 🌟 1. 新增：為更新的消息也構建帶人數的收藏鍵盤
-        let target_id = gallery_data.url.id();
-        let fav_count = FavoriteEntity::count_by_gallery(target_id).await.unwrap_or(0);
-        let fav_text = if fav_count > 0 { format!("⭐ 收藏 ({})", fav_count) } else { "⭐ 收藏".to_string() };
-        let fav_kb = InlineKeyboardMarkup::new(vec![vec![
-            InlineKeyboardButton::callback(fav_text, CallbackData::FavToggle(target_id).pack())
-        ]]);
-
         let msg = if let Some(parent) = &gallery_data.parent {
             if let Some(pmsg) = MessageEntity::get_by_gallery(parent.id()).await? {
                 self.bot
                     .send_message(self.config.telegram.channel_id.clone(), text)
                     .reply_to_message_id(MessageId(pmsg.id))
-                    .reply_markup(fav_kb.clone()) // 🌟 新增
                     .parse_mode(teloxide::types::ParseMode::Html)
                     .await?
             } else {
                 self.bot
                     .send_message(self.config.telegram.channel_id.clone(), text)
-                    .reply_markup(fav_kb.clone()) // 🌟 新增
                     .parse_mode(teloxide::types::ParseMode::Html)
                     .await?
             }
         } else {
             self.bot
                 .send_message(self.config.telegram.channel_id.clone(), text)
-                .reply_markup(fav_kb) // 🌟 新增
                 .parse_mode(teloxide::types::ParseMode::Html)
                 .await?
         };
@@ -204,14 +190,6 @@ impl ExloliUploader {
                 .create_message_text(&current_gallery_data, &telegraph.url)
                 .await?;
 
-            // 🌟 1. 新增：為更新的消息也構建收藏鍵盤
-            let target_id = current_gallery_data.url.id();
-            let fav_count = FavoriteEntity::count_by_gallery(target_id).await.unwrap_or(0);
-            let fav_text = if fav_count > 0 { format!("⭐ 收藏 ({})", fav_count) } else { "⭐ 收藏".to_string() };
-            let fav_kb = InlineKeyboardMarkup::new(vec![vec![
-                InlineKeyboardButton::callback(fav_text, CallbackData::FavToggle(target_id).pack())
-            ]]);
-                
             let edit_res = self.bot
                 .edit_message_text(
                     self.config.telegram.channel_id.clone(),
@@ -219,7 +197,6 @@ impl ExloliUploader {
                     text,
                 )
                 .parse_mode(teloxide::types::ParseMode::Html)
-                .reply_markup(fav_kb) // 🌟 2. 新增：掛載鍵盤
                 .await;
 
             if let Err(e) = edit_res {
@@ -250,15 +227,6 @@ impl ExloliUploader {
             .create_message_text(gallery, &article.url)
             .await?;
 
-        // 🌟 1. 新增：為重新發布的消息也構建收藏鍵盤
-        let target_id = gallery.id;
-        
-        let fav_count = FavoriteEntity::count_by_gallery(target_id).await.unwrap_or(0);
-        let fav_text = if fav_count > 0 { format!("⭐ 收藏 ({})", fav_count) } else { "⭐ 收藏".to_string() };
-        let fav_kb = InlineKeyboardMarkup::new(vec![vec![
-            InlineKeyboardButton::callback(fav_text, CallbackData::FavToggle(target_id).pack())
-        ]]);
-            
         let edit_res = self.bot
             .edit_message_text(
                 self.config.telegram.channel_id.clone(),
@@ -266,7 +234,6 @@ impl ExloliUploader {
                 text,
             )
             .parse_mode(teloxide::types::ParseMode::Html)
-            .reply_markup(fav_kb) // 🌟 2. 新增：掛載鍵盤
             .await;
 
         if let Err(e) = edit_res {
@@ -337,8 +304,6 @@ impl ExloliUploader {
 // ==========================================
 impl ExloliUploader {
     /// 獲取畫廊圖片，並透過 MPSC 通道流轉到 ImgBB
-    /// 返回值：Result<bool>，true 表示本批次所有待处理图片均处理成功（上传成功或GIF被正常跳过）
-    /// 獲取畫廊圖片，並透過 MPSC 通道流轉到 ImgBB
     /// 返回值：Result<bool>，true 表示本批次所有待处理图片均处理成功
     async fn upload_gallery_image(&self, gallery: &EhGallery) -> Result<bool> {
         let mut pages = vec![];
@@ -384,7 +349,7 @@ impl ExloliUploader {
             .timeout(Duration::from_secs(60)) // 延長超時以適應輪詢
             .build()?;
             
-        // 併發限制：建議保持較低 (如 1~3)，因為我們有多個 Key，可以適當放寬一點點，但穩妥起見還是推薦 1
+        // 併發限制：建議保持較低 (如 1~3)
         let concurrent_limit = self.config.threads_num.max(3); 
         
         let uploader = tokio::spawn(
@@ -395,9 +360,6 @@ impl ExloliUploader {
                 let mut key_index = 0; // 輪詢計數器
 
                 while let Some((page, (fileindex, url))) = rx.recv().await {
-                    // 【策略調整】有多個 Key 後，我們可以適當減少強制等待時間
-                    // 之前的 sleep(5) 可以降為 sleep(1) 或者直接去掉，取決於你有多少個 Key
-                    // 如果你有 3 個 Key，相當於冷卻時間變為 3 倍，所以這裡設為 1 秒即可
                     tokio::time::sleep(Duration::from_secs(1)).await; 
 
                     let mut suffix = url.split('.').last().unwrap_or("jpg");
