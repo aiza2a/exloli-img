@@ -2,7 +2,6 @@ use anyhow::{Context, Result};
 use reqwest::multipart::{Form, Part};
 use reqwest::Client;
 use std::time::Duration;
-// 引入 serde_json::Value 来处理动态解析
 use serde_json::Value;
 
 #[derive(Clone)]
@@ -15,7 +14,6 @@ pub struct KvaultUploader {
 impl KvaultUploader {
     pub fn new(base_url: &str, api_token: &str) -> Self {
         Self {
-            // 确保去除结尾的斜杠，方便后续拼接
             base_url: base_url.trim_end_matches('/').to_string(),
             api_token: api_token.to_string(),
             client: Client::builder()
@@ -29,7 +27,6 @@ impl KvaultUploader {
         let form = Form::new()
             .part("file", Part::bytes(file_bytes.to_vec()).file_name(file_name.to_string()));
 
-        // K-Vault 的标准 v1 接口
         let upload_url = format!("{}/api/v1/upload", self.base_url);
 
         let res = self.client
@@ -47,15 +44,19 @@ impl KvaultUploader {
             let parsed: Value = serde_json::from_str(&text)
                 .context(format!("JSON 解析失败: {}", text))?;
             
-            // 动态匹配 K-Vault 及衍生产物可能的返回结构
-            let extracted_url = if let Some(url) = parsed.pointer("/files/0/src").and_then(|v| v.as_str()) {
-                Some(url) // 格式: { "files": [ { "src": "/file/..." } ] }
+            // ✨ 核心修改：新增对 K-Vault 最新 API 结构 (links/download) 的解析提取
+            let extracted_url = if let Some(url) = parsed.pointer("/links/download").and_then(|v| v.as_str()) {
+                Some(url) // 优先匹配 K-Vault 标准格式的直链
+            } else if let Some(url) = parsed.pointer("/links/share").and_then(|v| v.as_str()) {
+                Some(url) // 备用分享链接
+            } else if let Some(url) = parsed.pointer("/files/0/src").and_then(|v| v.as_str()) {
+                Some(url) 
             } else if let Some(url) = parsed.pointer("/0/src").and_then(|v| v.as_str()) {
-                Some(url) // 格式: [ { "src": "/file/..." } ]
+                Some(url) 
             } else if let Some(src) = parsed.get("src").and_then(|v| v.as_str()) {
-                Some(src) // 格式: { "src": "/file/..." }
+                Some(src) 
             } else if let Some(url) = parsed.pointer("/data/url").and_then(|v| v.as_str()) {
-                Some(url) // 备用兼容
+                Some(url) 
             } else {
                 None
             };
@@ -63,7 +64,8 @@ impl KvaultUploader {
             if let Some(url_str) = extracted_url {
                 let mut full_url = url_str.to_string();
                 
-                // ✨ 核心修改：如果是相对路径，补全你的 Cloudflare 域名
+                // 如果返回的是相对路径，则补全域名；
+                // 你目前的接口返回的是绝对路径 (https://...)，所以这段代码不会触发，完美兼容。
                 if full_url.starts_with('/') {
                     full_url = format!("{}{}", self.base_url, full_url);
                 }
