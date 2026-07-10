@@ -2,7 +2,7 @@ name: CI and image publish
 
 on:
   push:
-    branches: [master]
+    branches: [master, maintenance/docs-ci-container]
     tags: ['v*']
   pull_request:
     branches: [master]
