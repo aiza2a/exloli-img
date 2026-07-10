@@ -12,7 +12,7 @@ RUN mkdir -p src/bin \
     && rm -rf src
 
 COPY . .
-RUN cargo build --release --locked --bin exloli
+RUN cargo build --release --bin exloli
 
 FROM debian:bookworm-slim
 WORKDIR /app
