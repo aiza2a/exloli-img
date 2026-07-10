@@ -19,6 +19,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - name: Remove trailing whitespace
+        run: find src -type f -name '*.rs' -print0 | xargs -0 sed -i 's/[[:space:]]*$//'
       - name: Format source
         run: cargo fmt --all
       - name: Commit formatting changes
