@@ -372,6 +372,7 @@ impl ExloliUploader {
         // 从配置中读取自建图床配置
         let base_url = self.config.kvault.base_url.clone();
         let api_token = self.config.kvault.api_token.clone();
+        let folder_path = self.config.kvault.folder_path.trim().to_string();
 
         if base_url.is_empty() || api_token.is_empty() {
             bail!("未配置自建图床！請在 config.toml 中填寫 [kvault] 區塊");
@@ -411,6 +412,7 @@ impl ExloliUploader {
                         .map_err(|_| anyhow!("图片上传队列已关闭"))?;
                     let client_clone = http_client.clone();
                     let img_uploader = uploader_client.clone();
+                    let upload_folder_path = folder_path.clone();
 
                     join_set.spawn(
                         async move {
@@ -421,7 +423,10 @@ impl ExloliUploader {
                                 match client_clone.get(&url).send().await {
                                     Ok(res) => match res.error_for_status() {
                                         Ok(res) => match res.bytes().await {
-                                            Ok(bytes) => match img_uploader.upload_file(&filename, &bytes).await {
+                                            Ok(bytes) => match img_uploader
+                                                .upload_file(&filename, &bytes, &upload_folder_path)
+                                                .await
+                                            {
                                                 Ok(uploaded_url) => {
                                                     let db_result: Result<()> = async {
                                                         ImageEntity::create(

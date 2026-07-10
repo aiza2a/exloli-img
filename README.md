@@ -116,6 +116,7 @@ api_token = "..."
 | `group_id` | 讨论组数字 ID；用于管理员识别和评分互动。 |
 | `auth_group_id` | 使用审核入群链接时要自动批准成员的群组 ID；不用该功能时仍填有效数字 ID。 |
 | `kvault.base_url` | K-Vault 根地址，不要以 `/` 结尾。 |
+| `kvault.folder_path` | 仅本 EXLOLI 实例写入 K-Vault 的目录；例如 `EXBA`。留空则写入根目录，不影响其它服务。 |
 
 ## Telegram 命令
 
