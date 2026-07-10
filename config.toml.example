@@ -54,3 +54,6 @@ base_url = "https://files.example.com"
 
 # K-Vault 上传 API Token。不要提交真实 Token。
 api_token = "..."
+
+# 仅本 EXLOLI 实例的上传目录。留空时仍存放在 K-Vault 根目录。
+folder_path = "EXBA"

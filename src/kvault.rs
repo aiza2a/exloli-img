@@ -20,9 +20,19 @@ impl KvaultUploader {
         }
     }
 
-    pub async fn upload_file(&self, file_name: &str, file_bytes: &[u8]) -> Result<String> {
-        let form = Form::new()
-            .part("file", Part::bytes(file_bytes.to_vec()).file_name(file_name.to_string()));
+    pub async fn upload_file(
+        &self,
+        file_name: &str,
+        file_bytes: &[u8],
+        folder_path: &str,
+    ) -> Result<String> {
+        let mut form = Form::new().part(
+            "file",
+            Part::bytes(file_bytes.to_vec()).file_name(file_name.to_string()),
+        );
+        if !folder_path.trim().is_empty() {
+            form = form.text("folderPath", folder_path.trim().to_string());
+        }
 
         let upload_url = format!("{}/api/v1/upload", self.base_url);
 

@@ -25,6 +25,8 @@ pub struct Config {
 pub struct KvaultConfig {
     pub base_url: String,
     pub api_token: String,
+    #[serde(default)]
+    pub folder_path: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
