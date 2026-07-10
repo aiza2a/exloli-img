@@ -1,4 +1,3 @@
-use std::ops::Deref;
 use chrono::prelude::*;
 use chrono::Duration;
 use indexmap::IndexMap;
@@ -7,6 +6,7 @@ use sqlx::error::BoxDynError;
 use sqlx::prelude::*;
 use sqlx::sqlite::SqliteQueryResult;
 use sqlx::{Database, Result, Sqlite};
+use std::ops::Deref;
 
 use super::db::DB;
 use crate::config::CHANNEL_ID;
@@ -44,7 +44,9 @@ impl GalleryEntity {
 
     pub async fn get(id: i32) -> Result<Option<GalleryEntity>> {
         sqlx::query_as::<_, GalleryEntity>("SELECT * FROM gallery WHERE id = ? AND deleted = FALSE")
-            .bind(id).fetch_optional(&*DB).await
+            .bind(id)
+            .fetch_optional(&*DB)
+            .await
     }
 
     pub async fn get_by_msg(id: i32) -> Result<Option<GalleryEntity>> {
@@ -55,32 +57,53 @@ impl GalleryEntity {
 
     pub async fn check(id: i32) -> Result<bool> {
         let res: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM gallery WHERE id = ? LIMIT 1")
-            .bind(id).fetch_optional(&*DB).await?;
+            .bind(id)
+            .fetch_optional(&*DB)
+            .await?;
         Ok(res.is_some())
     }
 
     pub async fn update_deleted(id: i32, deleted: bool) -> Result<SqliteQueryResult> {
-        sqlx::query("UPDATE gallery SET deleted = ? WHERE id = ?").bind(deleted).bind(id).execute(&*DB).await
+        sqlx::query("UPDATE gallery SET deleted = ? WHERE id = ?")
+            .bind(deleted)
+            .bind(id)
+            .execute(&*DB)
+            .await
     }
 
     pub async fn delete(id: i32) -> Result<SqliteQueryResult> {
         sqlx::query("DELETE FROM gallery WHERE id = ?").bind(id).execute(&*DB).await
     }
 
-    pub async fn list(start: NaiveDate, end: NaiveDate, limit: i32, page: i32) -> Result<Vec<(f32, String, i32)>> {
+    pub async fn list(
+        start: NaiveDate,
+        end: NaiveDate,
+        limit: i32,
+        page: i32,
+    ) -> Result<Vec<(f32, String, i32)>> {
         let offset = page * limit;
         // 关键修复：显式定义匿名结构体以接收联表查询结果
         #[derive(sqlx::FromRow)]
-        struct ListRow { score: f64, title: String, id: i32 }
+        struct ListRow {
+            score: f64,
+            title: String,
+            id: i32,
+        }
 
         let records = sqlx::query_as::<_, ListRow>(
             r#"SELECT poll.score, gallery.title, gallery.id FROM gallery
             JOIN poll ON poll.gallery_id = gallery.id
             JOIN message ON message.gallery_id = gallery.id
             WHERE gallery.posted BETWEEN ? AND ? GROUP BY poll.id
-            ORDER BY poll.score DESC LIMIT ? OFFSET ?"#
-        ).bind(start).bind(end).bind(limit).bind(offset).fetch_all(&*DB).await?;
-        
+            ORDER BY poll.score DESC LIMIT ? OFFSET ?"#,
+        )
+        .bind(start)
+        .bind(end)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&*DB)
+        .await?;
+
         Ok(records.into_iter().map(|x| (x.score as f32, x.title, x.id)).collect())
     }
 
@@ -89,17 +112,23 @@ impl GalleryEntity {
         sqlx::query_as::<_, GalleryEntity>(
             r#"SELECT gallery.* FROM gallery JOIN poll ON poll.gallery_id = gallery.id
             WHERE gallery.deleted = FALSE AND (poll.score >= 0.8 OR gallery.posted >= ?)"#,
-        ).bind(since).fetch_all(&*DB).await
+        )
+        .bind(since)
+        .fetch_all(&*DB)
+        .await
     }
 
     pub async fn get_random() -> Result<Option<Self>> {
-        sqlx::query_as::<_, Self>("SELECT * FROM gallery WHERE deleted = FALSE ORDER BY RANDOM() LIMIT 1")
-            .fetch_optional(&*DB).await
+        sqlx::query_as::<_, Self>(
+            "SELECT * FROM gallery WHERE deleted = FALSE ORDER BY RANDOM() LIMIT 1",
+        )
+        .fetch_optional(&*DB)
+        .await
     }
 
     pub async fn get_random_with_tags(tags_conditions: &[Vec<String>]) -> Result<Option<Self>> {
         let mut query = String::from("SELECT * FROM gallery WHERE deleted = FALSE");
-        
+
         for condition in tags_conditions {
             query.push_str(" AND (");
             let mut parts = Vec::new();
@@ -112,35 +141,48 @@ impl GalleryEntity {
         query.push_str(" ORDER BY RANDOM() LIMIT 1");
 
         let mut q = sqlx::query_as::<_, Self>(&query);
-        
+
         // 綁定所有中英標籤變量
         for condition in tags_conditions {
             for tag in condition {
                 let like_str = format!("%{}%", tag);
-                q = q.bind(like_str.clone()).bind(like_str.clone()).bind(like_str); 
+                q = q.bind(like_str.clone()).bind(like_str.clone()).bind(like_str);
             }
         }
         q.fetch_optional(&*DB).await
     }
-    
+
     pub async fn count() -> Result<i32> {
         let res: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM gallery WHERE deleted = FALSE")
-            .fetch_one(&*DB).await?;
+            .fetch_one(&*DB)
+            .await?;
         Ok(res.0 as i32)
     }
 }
 
 impl<'q> Decode<'q, Sqlite> for TagsEntity {
-    fn decode(value: <Sqlite as HasValueRef<'q>>::ValueRef) -> std::result::Result<Self, BoxDynError> {
+    fn decode(
+        value: <Sqlite as HasValueRef<'q>>::ValueRef,
+    ) -> std::result::Result<Self, BoxDynError> {
         let str = <String as Decode<Sqlite>>::decode(value)?;
-        if str.is_empty() { Ok(TagsEntity(IndexMap::new())) } else { Ok(TagsEntity(serde_json::from_str(&str)?)) }
+        if str.is_empty() {
+            Ok(TagsEntity(IndexMap::new()))
+        } else {
+            Ok(TagsEntity(serde_json::from_str(&str)?))
+        }
     }
 }
 impl Type<Sqlite> for TagsEntity {
-    fn type_info() -> <Sqlite as Database>::TypeInfo { <String as Type<Sqlite>>::type_info() }
-    fn compatible(ty: &<Sqlite as Database>::TypeInfo) -> bool { <String as Type<Sqlite>>::compatible(ty) }
+    fn type_info() -> <Sqlite as Database>::TypeInfo {
+        <String as Type<Sqlite>>::type_info()
+    }
+    fn compatible(ty: &<Sqlite as Database>::TypeInfo) -> bool {
+        <String as Type<Sqlite>>::compatible(ty)
+    }
 }
 impl Deref for TagsEntity {
     type Target = IndexMap<String, Vec<String>>;
-    fn deref(&self) -> &Self::Target { &self.0 }
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }

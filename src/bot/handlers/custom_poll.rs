@@ -4,7 +4,7 @@ use tracing::info;
 
 use crate::bot::handlers::utils;
 use crate::bot::Bot;
-use crate::database::{GalleryEntity, PollEntity, FavoriteEntity};
+use crate::database::{FavoriteEntity, GalleryEntity, PollEntity};
 use crate::reply_to;
 
 pub async fn custom_pool_sender(bot: Bot, message: Message) -> Result<()> {

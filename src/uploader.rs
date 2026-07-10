@@ -6,21 +6,21 @@ use chrono::{Datelike, Utc};
 use futures::StreamExt;
 use regex::Regex;
 use reqwest::{Client, StatusCode};
+use std::sync::Arc;
 use telegraph_rs::{html_to_node, Telegraph};
 use teloxide::prelude::*;
 use teloxide::types::MessageId;
+use teloxide::utils::html::escape;
+use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
+use tokio::task::JoinSet;
 use tokio::time;
 use tracing::{debug, error, info, Instrument};
-use std::sync::Arc;
-use tokio::sync::Semaphore;
-use tokio::task::JoinSet;
-use teloxide::utils::html::escape;
 
 use crate::bot::Bot;
 use crate::config::Config;
 use crate::database::{
-    GalleryEntity, ImageEntity, MessageEntity, PageEntity, PollEntity, TelegraphEntity
+    GalleryEntity, ImageEntity, MessageEntity, PageEntity, PollEntity, TelegraphEntity,
 };
 use crate::ehentai::{EhClient, EhGallery, EhGalleryUrl, GalleryInfo};
 use crate::kvault::KvaultUploader;
@@ -47,13 +47,7 @@ impl ExloliUploader {
             .access_token(&config.telegraph.access_token)
             .create()
             .await?;
-        Ok(Self {
-            ehentai,
-            config,
-            telegraph,
-            bot,
-            trans,
-        })
+        Ok(Self { ehentai, config, telegraph, bot, trans })
     }
 
     /// 每隔 interval 分鐘檢查一次
@@ -77,18 +71,10 @@ impl ExloliUploader {
         while let Some(next) = stream.next().await {
             // 錯誤不要上拋，避免影響後續畫廊
             if let Err(err) = self.try_update(&next, true).await {
-                error!(
-                    "check_and_update: {:?}\n{}",
-                    err,
-                    Backtrace::force_capture()
-                );
+                error!("check_and_update: {:?}\n{}", err, Backtrace::force_capture());
             }
             if let Err(err) = self.try_upload(&next, true).await {
-                error!(
-                    "check_and_upload: {:?}\n{}",
-                    err,
-                    Backtrace::force_capture()
-                );
+                error!("check_and_upload: {:?}\n{}", err, Backtrace::force_capture());
             }
             time::sleep(Duration::from_secs(1)).await;
         }
@@ -99,29 +85,28 @@ impl ExloliUploader {
     pub async fn try_upload(&self, gallery_url_param: &EhGalleryUrl, check: bool) -> Result<()> {
         if check
             && GalleryEntity::check(gallery_url_param.id()).await?
-            && MessageEntity::get_by_gallery(gallery_url_param.id())
-                .await?
-                .is_some()
+            && MessageEntity::get_by_gallery(gallery_url_param.id()).await?.is_some()
         {
             return Ok(());
         }
 
         let gallery_data = self.ehentai.get_gallery(gallery_url_param).await?;
-        
+
         // 核心修改：检测上传是否完整
         // 如果 upload_gallery_image 返回 false，说明有图片失败，直接返回，不发送消息
         // 由于没有写入数据库，下次 check 循环会再次扫描并重试
         if !self.upload_gallery_image(&gallery_data).await? {
-            error!("畫廊 {} 上傳不完整（存在失敗圖片），跳過本次推送，等待下次重試。", gallery_data.url.id());
+            error!(
+                "畫廊 {} 上傳不完整（存在失敗圖片），跳過本次推送，等待下次重試。",
+                gallery_data.url.id()
+            );
             return Ok(());
         }
 
         let article = self.publish_telegraph_article(&gallery_data).await?;
-        
+
         // 建立 Telegram 訊息
-        let text = self
-            .create_message_text(&gallery_data, &article.url)
-            .await?;
+        let text = self.create_message_text(&gallery_data, &article.url).await?;
 
         let msg = if let Some(parent) = &gallery_data.parent {
             if let Some(pmsg) = MessageEntity::get_by_gallery(parent.id()).await? {
@@ -142,7 +127,7 @@ impl ExloliUploader {
                 .parse_mode(teloxide::types::ParseMode::Html)
                 .await?
         };
-        
+
         // 資料入庫
         MessageEntity::create(msg.id.0, gallery_data.url.id()).await?;
         TelegraphEntity::create(gallery_data.url.id(), &article.url).await?;
@@ -176,21 +161,18 @@ impl ExloliUploader {
         }
 
         let current_gallery_data = self.ehentai.get_gallery(gallery_url_param).await?;
-        
+
         // 上傳新發現的圖片 (忽略返回值，更新流程尽量执行)
         let _ = self.upload_gallery_image(&current_gallery_data).await?;
 
         if current_gallery_data.tags != entity.tags.0 || current_gallery_data.title != entity.title
         {
-            let telegraph = TelegraphEntity::get(current_gallery_data.url.id())
-                .await?
-                .unwrap();
-                
-            let text = self
-                .create_message_text(&current_gallery_data, &telegraph.url)
-                .await?;
+            let telegraph = TelegraphEntity::get(current_gallery_data.url.id()).await?.unwrap();
 
-            let edit_res = self.bot
+            let text = self.create_message_text(&current_gallery_data, &telegraph.url).await?;
+
+            let edit_res = self
+                .bot
                 .edit_message_text(
                     self.config.telegram.channel_id.clone(),
                     MessageId(message.id),
@@ -216,23 +198,18 @@ impl ExloliUploader {
     /// 重新發布指定畫廊的文章，並更新訊息
     pub async fn republish(&self, gallery: &GalleryEntity, msg: &MessageEntity) -> Result<()> {
         info!("重新發布：{}", msg.id);
-        
+
         let eh_gallery_url = gallery.url();
         let gallery_data_for_catbox = self.ehentai.get_gallery(&eh_gallery_url).await?;
-        
+
         let _ = self.upload_gallery_image(&gallery_data_for_catbox).await?;
 
         let article = self.publish_telegraph_article(gallery).await?;
-        let text = self
-            .create_message_text(gallery, &article.url)
-            .await?;
+        let text = self.create_message_text(gallery, &article.url).await?;
 
-        let edit_res = self.bot
-            .edit_message_text(
-                self.config.telegram.channel_id.clone(),
-                MessageId(msg.id),
-                text,
-            )
+        let edit_res = self
+            .bot
+            .edit_message_text(self.config.telegram.channel_id.clone(), MessageId(msg.id), text)
             .parse_mode(teloxide::types::ParseMode::Html)
             .await;
 
@@ -243,7 +220,7 @@ impl ExloliUploader {
                 return Err(e.into());
             }
         }
-            
+
         TelegraphEntity::update(gallery.id, &article.url).await?;
         Ok(())
     }
@@ -280,9 +257,8 @@ impl ExloliUploader {
             galleries = GalleryEntity::list_scans().await?;
         }
         for gallery in galleries.iter().rev() {
-            let telegraph = TelegraphEntity::get(gallery.id)
-                .await?
-                .ok_or(anyhow!("找不到 telegraph"))?;
+            let telegraph =
+                TelegraphEntity::get(gallery.id).await?.ok_or(anyhow!("找不到 telegraph"))?;
             if let Some(msg) = MessageEntity::get_by_gallery(gallery.id).await? {
                 info!("檢測畫廊：{}", gallery.url());
                 if !self.check_telegraph(&telegraph.url).await? {
@@ -309,9 +285,10 @@ impl ExloliUploader {
         let mut pages = vec![];
         for page in &gallery.pages {
             // 🌟 1. 攔截已知廣告圖：直接當作空氣跳過
-            if crate::database::BadImageEntity::is_bad(page.hash()).await.unwrap_or(None) == Some(2) {
+            if crate::database::BadImageEntity::is_bad(page.hash()).await.unwrap_or(None) == Some(2)
+            {
                 info!("跳過已知廣告圖：{}", page.hash());
-                continue; 
+                continue;
             }
             match ImageEntity::get_by_hash(page.hash()).await? {
                 Some(img) => {
@@ -320,10 +297,12 @@ impl ExloliUploader {
                 None => pages.push(page.clone()),
             }
         }
-        
+
         let total_missing = pages.len();
         info!("需要下載 & 上傳 {} 張圖片", total_missing);
-        if total_missing == 0 { return Ok(true); }
+        if total_missing == 0 {
+            return Ok(true);
+        }
 
         // MPSC 併發通道
         let concurrent = self.config.threads_num;
@@ -347,95 +326,120 @@ impl ExloliUploader {
         // 从配置中读取自建图床配置
         let base_url = self.config.kvault.base_url.clone();
         let api_token = self.config.kvault.api_token.clone();
-        
+
         if base_url.is_empty() || api_token.is_empty() {
-             bail!("未配置自建图床！請在 config.toml 中填寫 [kvault] 區塊");
+            bail!("未配置自建图床！請在 config.toml 中填寫 [kvault] 區塊");
         }
 
-        let http_client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(60))
-            .build()?;
-            
-        let concurrent_limit = self.config.threads_num.max(3); 
+        let http_client = reqwest::Client::builder().timeout(Duration::from_secs(60)).build()?;
+
+        let concurrent_limit = self.config.threads_num.max(3);
         let total_pages = gallery.pages.len() as i32;
-        
+
         // 实例化新的 Kvault Uploader
         let uploader_client = KvaultUploader::new(&base_url, &api_token);
-        
+
         let uploader = tokio::spawn(
             async move {
                 let semaphore = Arc::new(Semaphore::new(concurrent_limit));
                 let mut join_set = JoinSet::new();
-                let mut processed_count = 0; 
+                let mut processed_count = 0;
 
                 while let Some((page, (fileindex, url))) = rx.recv().await {
                     // 🚀 删除了原有的 tokio::time::sleep(Duration::from_secs(1)).await; 彻底解除限速
 
                     let mut suffix = url.split('.').last().unwrap_or("jpg");
-                    if suffix == "webp" { suffix = "jpg"; }
-                    if suffix == "gif" { 
+                    if suffix == "webp" {
+                        suffix = "jpg";
+                    }
+                    if suffix == "gif" {
                         processed_count += 1;
-                        continue; 
-                    } 
-                    
+                        continue;
+                    }
+
                     let filename = format!("{}.{}", page.hash(), suffix);
-                    
+
                     let permit = semaphore.clone().acquire_owned().await.unwrap();
                     let client_clone = http_client.clone();
-                    let img_uploader = uploader_client.clone(); 
+                    let img_uploader = uploader_client.clone();
 
-                    join_set.spawn(async move {
-                        let mut success = false;
-                        
-                        // 依然保留 3 次重试，但对于自建图床几乎用不到
-                        for attempt in 1..=3 {
-                            match client_clone.get(&url).send().await {
-                                Ok(res) => {
-                                    if let Ok(bytes) = res.bytes().await {
-                                        // 🗑️ 已经彻底删除了 has_qrcode 二维码检测相关的代码
+                    join_set.spawn(
+                        async move {
+                            let mut success = false;
 
-                                        match img_uploader.upload_file(&filename, &bytes).await {
-                                            Ok(uploaded_url) => {
-                                                info!("图床上传成功: {} -> {}", page.page(), uploaded_url);
-                                                let _ = ImageEntity::create(fileindex, page.hash(), &uploaded_url).await;
-                                                let _ = PageEntity::create(page.gallery_id(), page.page(), fileindex).await;
-                                                success = true;
-                                                break; // 成功则跳出重试循环
+                            // 依然保留 3 次重试，但对于自建图床几乎用不到
+                            for attempt in 1..=3 {
+                                match client_clone.get(&url).send().await {
+                                    Ok(res) => {
+                                        if let Ok(bytes) = res.bytes().await {
+                                            // 🗑️ 已经彻底删除了 has_qrcode 二维码检测相关的代码
+
+                                            match img_uploader.upload_file(&filename, &bytes).await
+                                            {
+                                                Ok(uploaded_url) => {
+                                                    info!(
+                                                        "图床上传成功: {} -> {}",
+                                                        page.page(),
+                                                        uploaded_url
+                                                    );
+                                                    let _ = ImageEntity::create(
+                                                        fileindex,
+                                                        page.hash(),
+                                                        &uploaded_url,
+                                                    )
+                                                    .await;
+                                                    let _ = PageEntity::create(
+                                                        page.gallery_id(),
+                                                        page.page(),
+                                                        fileindex,
+                                                    )
+                                                    .await;
+                                                    success = true;
+                                                    break; // 成功则跳出重试循环
+                                                }
+                                                Err(err) => error!(
+                                                    "图床上传失败 (尝试 {}/3): {}",
+                                                    attempt, err
+                                                ),
                                             }
-                                            Err(err) => error!("图床上传失败 (尝试 {}/3): {}", attempt, err),
                                         }
                                     }
+                                    Err(err) => error!("E站下载失败 (尝试 {}/3): {}", attempt, err),
                                 }
-                                Err(err) => error!("E站下载失败 (尝试 {}/3): {}", attempt, err),
+                                // 如果失败了才稍微等一下，避免死循环攻击
+                                if attempt < 3 {
+                                    tokio::time::sleep(Duration::from_secs(2)).await;
+                                }
                             }
-                            // 如果失败了才稍微等一下，避免死循环攻击
-                            if attempt < 3 { tokio::time::sleep(Duration::from_secs(2)).await; }
+
+                            if !success {
+                                error!("🚨 圖片 {} 彻底上传失败", page.page());
+                            }
+
+                            drop(permit);
+                            success
                         }
-                        
-                        if !success { error!("🚨 圖片 {} 彻底上传失败", page.page()); }
-                        
-                        drop(permit);
-                        success 
-                    }.in_current_span());
+                        .in_current_span(),
+                    );
                 }
-                
+
                 // ... 下方的 join_set.join_next().await 保持不变
-                
+
                 while let Some(res) = join_set.join_next().await {
                     match res {
                         Ok(true) => processed_count += 1,
-                        Ok(false) => {},
+                        Ok(false) => {}
                         Err(e) => error!("任務異常: {}", e),
                     }
                 }
-                
+
                 Result::<usize>::Ok(processed_count)
             }
             .in_current_span(),
         );
 
         let (_, count) = tokio::try_join!(flatten(getter), flatten(uploader))?;
-        
+
         if count == total_missing {
             info!("本批次處理完整 ({} / {})", count, total_missing);
             Ok(true)
@@ -459,7 +463,7 @@ impl ExloliUploader {
         for img in images {
             html.push_str(&format!(r#"<img src="{}">"#, img.url()));
         }
-        
+
         html.push_str(&format!("<p>ᴘᴀɢᴇꜱ : {}</p>", gallery.pages()));
 
         let node = html_to_node(&html);

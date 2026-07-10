@@ -8,7 +8,7 @@ use exloli_next::ehentai::EhClient;
 use exloli_next::tags::EhTagTransDB;
 use exloli_next::uploader::ExloliUploader;
 use teloxide::prelude::*;
-use teloxide::types::{ParseMode, Recipient, BotCommandScope};
+use teloxide::types::{BotCommandScope, ParseMode, Recipient};
 use teloxide::utils::command::BotCommands;
 // 引入指令定義
 use exloli_next::bot::command::{AdminCommand, PublicCommand};
@@ -29,7 +29,7 @@ async fn main() -> Result<()> {
 
     let trans = EhTagTransDB::new(&config.exhentai.trans_file);
     let ehentai = EhClient::new(&config.exhentai.cookie).await?;
-    
+
     let bot = Bot::new(&config.telegram.token)
         .throttle(Default::default())
         .parse_mode(ParseMode::Html)
@@ -38,13 +38,11 @@ async fn main() -> Result<()> {
     // ========================================================
     // 🔥🔥🔥 註冊指令菜單 🔥🔥🔥
     // ========================================================
-    
+
     tracing::info!("正在向 Telegram 註冊指令列表...");
 
     // 1. 為所有用戶註冊公共指令
-    bot.set_my_commands(PublicCommand::bot_commands())
-        .scope(BotCommandScope::Default)
-        .await?;
+    bot.set_my_commands(PublicCommand::bot_commands()).scope(BotCommandScope::Default).await?;
 
     // 2. 為管理員群組註冊完整指令 (包含 AdminCommand)
     // 這裡修正了 ChatId 和 Recipient 的轉換邏輯
@@ -52,16 +50,14 @@ async fn main() -> Result<()> {
     if admin_chat_id.0 != 0 {
         let mut full_commands = PublicCommand::bot_commands();
         full_commands.extend(AdminCommand::bot_commands());
-        
+
         // 將 ChatId 轉換為 Recipient::Id
         bot.set_my_commands(full_commands)
-            .scope(BotCommandScope::Chat { 
-                chat_id: Recipient::Id(admin_chat_id) 
-            })
+            .scope(BotCommandScope::Chat { chat_id: Recipient::Id(admin_chat_id) })
             .await?;
         tracing::info!("已為管理群組 {} 註冊管理員指令。", admin_chat_id);
     }
-    
+
     tracing::info!("指令註冊完成！");
     // ========================================================
 

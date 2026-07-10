@@ -9,10 +9,10 @@ use crate::bot::handlers::{cmd_best_keyboard, cmd_best_text, poll_keyboard};
 use crate::bot::utils::{CallbackData, ChallengeLocker, RateLimiter};
 use crate::bot::Bot;
 use crate::config::Config;
-use crate::database::{ChallengeHistory, GalleryEntity, PollEntity, VoteEntity, ImageEntity};
+use crate::database::{ChallengeHistory, GalleryEntity, ImageEntity, PollEntity, VoteEntity};
 use crate::ehentai::GalleryInfo;
 use crate::tags::EhTagTransDB;
-use teloxide::types::{ParseMode, InputFile};
+use teloxide::types::{InputFile, ParseMode};
 use teloxide::utils::html::{escape, link, user_mention};
 
 pub fn callback_query_handler() -> Handler<'static, DependencyMap, Result<()>, DpHandlerDescription>
@@ -20,7 +20,7 @@ pub fn callback_query_handler() -> Handler<'static, DependencyMap, Result<()>, D
     dptree::entry()
         .branch(case![CallbackData::VoteForPoll(poll, option)].endpoint(callback_vote_for_poll))
         .branch(case![CallbackData::Challenge(id, artist)].endpoint(callback_challenge))
-        .branch(case![CallbackData::RandomAnother(tags)].endpoint(callback_random_another)) 
+        .branch(case![CallbackData::RandomAnother(tags)].endpoint(callback_random_another))
         .branch(case![CallbackData::FavToggle(id)].endpoint(callback_fav_toggle))
         .branch(case![CallbackData::FavPage(page)].endpoint(callback_fav_page))
         .endpoint(callback_change_page)
@@ -52,7 +52,8 @@ async fn callback_challenge(
         let result = if success { "答对了！" } else { "答错了……" };
         let artist = trans.trans_raw("artist", &answer);
         let url = gallery_entity.url().url();
-        let preview = link(&preview, &escape(&gallery_entity.title_jp.unwrap_or(gallery_entity.title)));
+        let preview =
+            link(&preview, &escape(&gallery_entity.title_jp.unwrap_or(gallery_entity.title)));
         let score = poll.score * 100.;
         let rank = poll.rank().await? * 100.;
 
@@ -89,7 +90,7 @@ async fn callback_vote_for_poll(
         let score = PollEntity::update_score(poll).await?;
         info!("更新分数：{} = {}", poll, score);
         let sum = votes.iter().sum::<i32>();
-        
+
         // 🌟 透過 Telegram 回覆鏈追溯當前的精確畫廊 ID，確保收藏按鈕不丟失
         let mut gallery_id = poll as i32; // 默認降級
         if let Some(message) = &query.message {
@@ -103,8 +104,9 @@ async fn callback_vote_for_poll(
         }
 
         // 🌟 生成帶有收藏按鈕的新鍵盤
-        let fav_count = crate::database::FavoriteEntity::count_by_gallery(gallery_id).await.unwrap_or(0);
-        let keyboard = poll_keyboard(poll, &votes, gallery_id, fav_count); 
+        let fav_count =
+            crate::database::FavoriteEntity::count_by_gallery(gallery_id).await.unwrap_or(0);
+        let keyboard = poll_keyboard(poll, &votes, gallery_id, fav_count);
         let text = format!("当前 {} 人投票，{:.2} 分", sum, score * 100.);
 
         if let Some(message) = query.message {
@@ -128,16 +130,17 @@ async fn callback_change_page(
         CallbackData::NextPage(from, to, offset) => (from, to, offset + 1),
         _ => return Ok(()), // 🌟 修復：如果不是翻頁按鈕，直接優雅忽略，絕不崩潰
     };
-    
+
     let text = cmd_best_text(from, to, offset, cfg.telegram.channel_id).await?;
     let keyboard = cmd_best_keyboard(from, to, offset);
 
     // 🌟 先消除按鈕加載狀態
-    let _ = bot.answer_callback_query(query.id.clone()).await; 
+    let _ = bot.answer_callback_query(query.id.clone()).await;
 
     if let Some(message) = query.message {
         // 🌟 忽略錯誤，並補上 parse_mode
-        let _ = bot.edit_message_text(message.chat.id, message.id, text)
+        let _ = bot
+            .edit_message_text(message.chat.id, message.id, text)
             .reply_markup(keyboard)
             .disable_web_page_preview(true)
             .parse_mode(ParseMode::Html)
@@ -153,14 +156,14 @@ async fn callback_random_another(
     bot: Bot,
     query: CallbackQuery,
     cfg: Config,
-    trans: EhTagTransDB, 
+    trans: EhTagTransDB,
     tags_str: String,
 ) -> Result<()> {
     let message = query.message.context("消息过旧")?;
     info!("{}: <- random another {}", query.from.id, tags_str);
 
     let tags: Vec<String> = tags_str.split_whitespace().map(|s| s.to_string()).collect();
-    
+
     // 🌟核心：獲取翻譯陣列
     let tags_conditions: Vec<Vec<String>> = tags.iter().map(|t| trans.search_raw_tags(t)).collect();
 
@@ -178,10 +181,10 @@ async fn callback_random_another(
                 Some(p) => p.rank().await? * 100.,
                 None => 0.0,
             };
-            
+
             let preview = gallery_preview_url(cfg.telegram.channel_id.clone(), gallery.id).await?;
             let url = gallery.url().url();
-            
+
             // 🌟 這是真正的 text 構建，已經去掉了那個報錯的佔位符
             let text = format!(
                 "🎲 <b>隨機抽取結果</b>\n\n<b>{}</b>\n\n📄 <b>預覽：</b>{}\n🔗 <b>地址：</b>{}\n⭐️ <b>評分：</b>{:.2}（{:.2}%）",
@@ -193,13 +196,24 @@ async fn callback_random_another(
             );
 
             // 🌟 動態獲取人數並把收藏按鈕加到鍵盤裡
-            let fav_count = crate::database::FavoriteEntity::count_by_gallery(gallery.id).await.unwrap_or(0);
-            let fav_text = if fav_count > 0 { format!("⭐ 收藏 ({})", fav_count) } else { "⭐ 收藏".to_string() };
-            let fav_btn = teloxide::types::InlineKeyboardButton::callback(fav_text, CallbackData::FavToggle(gallery.id).pack());
+            let fav_count =
+                crate::database::FavoriteEntity::count_by_gallery(gallery.id).await.unwrap_or(0);
+            let fav_text = if fav_count > 0 {
+                format!("⭐ 收藏 ({})", fav_count)
+            } else {
+                "⭐ 收藏".to_string()
+            };
+            let fav_btn = teloxide::types::InlineKeyboardButton::callback(
+                fav_text,
+                CallbackData::FavToggle(gallery.id).pack(),
+            );
 
             let keyboard = teloxide::types::InlineKeyboardMarkup::new(vec![vec![
-                teloxide::types::InlineKeyboardButton::callback("🎲 再來一個本子", CallbackData::RandomAnother(tags_str).pack()),
-                fav_btn // 🌟 與再來一本並排顯示
+                teloxide::types::InlineKeyboardButton::callback(
+                    "🎲 再來一個本子",
+                    CallbackData::RandomAnother(tags_str).pack(),
+                ),
+                fav_btn, // 🌟 與再來一本並排顯示
             ]]);
 
             let images = ImageEntity::get_by_gallery_id(gallery.id).await?;
@@ -215,7 +229,7 @@ async fn callback_random_another(
                     .reply_markup(keyboard)
                     .await?;
             }
-            
+
             bot.answer_callback_query(query.id).await?;
         }
         None => {
@@ -231,9 +245,10 @@ async fn callback_random_another(
 async fn callback_fav_toggle(bot: Bot, query: CallbackQuery, id: i32) -> Result<()> {
     let user_id = query.from.id.0 as i64;
     let added = crate::database::FavoriteEntity::toggle(user_id, id).await?;
-    
+
     // 全局彈窗
-    let alert_msg = if added { "⭐ 已加入個人收藏夾！" } else { "❌ 已從收藏夾移除！" };
+    let alert_msg =
+        if added { "⭐ 已加入個人收藏夾！" } else { "❌ 已從收藏夾移除！" };
     bot.answer_callback_query(query.id.clone()).text(alert_msg).show_alert(false).await?;
 
     // 🌟 獲取最新人數
@@ -244,19 +259,28 @@ async fn callback_fav_toggle(bot: Bot, query: CallbackQuery, id: i32) -> Result<
             let mut new_inline_keyboard = markup.inline_keyboard.clone();
             let target_pack = CallbackData::FavToggle(id).pack();
             let mut found = false;
-            
+
             for row in &mut new_inline_keyboard {
                 for button in row {
                     // 🌟 修复：使用 if let 模式匹配解构 Enum，安全提取内部的字符串
-                    if let teloxide::types::InlineKeyboardButtonKind::CallbackData(ref data) = button.kind {
+                    if let teloxide::types::InlineKeyboardButtonKind::CallbackData(ref data) =
+                        button.kind
+                    {
                         if data == &target_pack {
                             let old_text = button.text.clone();
                             // 核心：如果是私聊，字会变成"✅ 已收藏"；如果是群聊/频道，维持原字不变！
                             let base_text = if message.chat.is_private() {
-                                if added { "✅ 已收藏" } else { "⭐ 收藏" }
+                                if added {
+                                    "✅ 已收藏"
+                                } else {
+                                    "⭐ 收藏"
+                                }
                             } else {
-                                if old_text.starts_with("⭐ 收藏本檔案") { "⭐ 收藏本檔案" } 
-                                else { "⭐ 收藏" }
+                                if old_text.starts_with("⭐ 收藏本檔案") {
+                                    "⭐ 收藏本檔案"
+                                } else {
+                                    "⭐ 收藏"
+                                }
                             };
 
                             // 拼接人数
@@ -271,12 +295,17 @@ async fn callback_fav_toggle(bot: Bot, query: CallbackQuery, id: i32) -> Result<
                         }
                     }
                 }
-                if found { break; }
+                if found {
+                    break;
+                }
             }
 
             if found {
                 let new_markup = teloxide::types::InlineKeyboardMarkup::new(new_inline_keyboard);
-                let _ = bot.edit_message_reply_markup(message.chat.id, message.id).reply_markup(new_markup).await;
+                let _ = bot
+                    .edit_message_reply_markup(message.chat.id, message.id)
+                    .reply_markup(new_markup)
+                    .await;
             }
         }
     }
@@ -286,20 +315,22 @@ async fn callback_fav_toggle(bot: Bot, query: CallbackQuery, id: i32) -> Result<
 async fn callback_fav_page(bot: Bot, query: CallbackQuery, page: i32, cfg: Config) -> Result<()> {
     let message = query.message.context("消息过旧")?;
     let user_id = query.from.id.0 as i64;
-    
-    let text = crate::bot::handlers::fav_text(user_id, page, cfg.telegram.channel_id.clone()).await?;
+
+    let text =
+        crate::bot::handlers::fav_text(user_id, page, cfg.telegram.channel_id.clone()).await?;
     let count = crate::database::FavoriteEntity::count(user_id).await?;
     let keyboard = crate::bot::handlers::fav_keyboard(page, count);
-    
+
     // 🌟 先消除加載動畫
     let _ = bot.answer_callback_query(query.id).await;
-    
+
     // 🌟 忽略內容未修改引發的報錯
-    let _ = bot.edit_message_text(message.chat.id, message.id, text)
+    let _ = bot
+        .edit_message_text(message.chat.id, message.id, text)
         .reply_markup(keyboard)
         .parse_mode(teloxide::types::ParseMode::Html)
         .disable_web_page_preview(true)
         .await;
-        
+
     Ok(())
 }

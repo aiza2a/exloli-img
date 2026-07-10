@@ -50,7 +50,7 @@ impl ChallengeView {
                         -- 🌟 排除被标记为广告的图片
                         UNION
                         SELECT id FROM image WHERE hash IN (SELECT hash FROM bad_image)
-                    ) ORDER BY random() LIMIT 500 
+                    ) ORDER BY random() LIMIT 500
                 ) GROUP BY artist
             ) ORDER BY random() LIMIT 4"#,
         )

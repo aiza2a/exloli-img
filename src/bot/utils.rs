@@ -18,10 +18,7 @@ use crate::database::ChallengeView;
 
 // 新增静态客户端
 static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
-    reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(20))
-        .build()
-        .unwrap()
+    reqwest::Client::builder().timeout(std::time::Duration::from_secs(20)).build().unwrap()
 });
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,10 +42,10 @@ impl CallbackData {
             Self::FavToggle(id) => format!("fav_t {}", id),
             Self::FavPage(p) => format!("fav_p {}", p),
             Self::RandomAnother(tags) => {
-                if tags.is_empty() { 
-                    "random".to_string() 
-                } else { 
-                    format!("random {}", tags) 
+                if tags.is_empty() {
+                    "random".to_string()
+                } else {
+                    format!("random {}", tags)
                 }
             }
         }
@@ -96,11 +93,7 @@ struct RateLimiterInner {
 impl RateLimiter {
     pub fn new(interval: std::time::Duration, limit: usize) -> Self {
         assert_ne!(limit, 0);
-        Self(Arc::new(RateLimiterInner {
-            interval,
-            limit,
-            data: Default::default(),
-        }))
+        Self(Arc::new(RateLimiterInner { interval, limit, data: Default::default() }))
     }
 
     pub fn insert(&self, key: UserId) -> Option<std::time::Duration> {

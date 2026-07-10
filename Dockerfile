@@ -1,29 +1,27 @@
-FROM rust:bullseye as builder
+# syntax=docker/dockerfile:1
 
+FROM rust:1-bookworm AS builder
 WORKDIR /app
 
-# 缓存依赖，提高构建速度
-RUN mkdir src && echo 'fn main() {}' > src/main.rs
-COPY Cargo.toml .
-COPY Cargo.lock .
-RUN cargo build --target-dir=target --release && rm -f src/main.rs
+# 先只复制清单，以便 Docker 缓存依赖编译层。
+COPY Cargo.toml Cargo.lock ./
+RUN mkdir -p src/bin \
+    && printf 'fn main() {}\n' > src/bin/exloli.rs \
+    && printf 'pub fn placeholder() {}\n' > src/lib.rs \
+    && cargo build --release --bin exloli \
+    && rm -rf src
 
 COPY . .
-RUN cargo install --target-dir=target  --bin=exloli --path .
+RUN cargo build --release --locked --bin exloli
 
-FROM debian:bullseye-slim
-ENV RUST_BACKTRACE=full
+FROM debian:bookworm-slim
 WORKDIR /app
+ENV RUST_BACKTRACE=1
+
 RUN apt-get update \
-    && apt-get install -y libsqlite3-0 libssl1.1 ca-certificates \
-    && rm -rf /var/lib/apt/lists/*  \
-    && rm -rf /var/cache/apt/archives/*
-RUN echo '/etc/ssl/openssl.cnf \
-system_default = system_default_sect \
-\
-[system_default_sect] \
-MinProtocol = TLSv1.2 \
-CipherString = DEFAULT@SECLEVEL=1 \
-' >> /etc/ssl/openssl.cnf
-COPY --from=builder /usr/local/cargo/bin/exloli /usr/local/bin/exloli
-CMD ["exloli"]
+    && apt-get install -y --no-install-recommends ca-certificates libsqlite3-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /app/target/release/exloli /usr/local/bin/exloli
+
+ENTRYPOINT ["exloli"]

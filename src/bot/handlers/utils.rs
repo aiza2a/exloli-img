@@ -8,7 +8,9 @@ use teloxide::types::{
 use teloxide::utils::html::{escape, link};
 
 use crate::bot::utils::CallbackData;
-use crate::database::{ChallengeView, FavoriteEntity, GalleryEntity, MessageEntity, TelegraphEntity};
+use crate::database::{
+    ChallengeView, FavoriteEntity, GalleryEntity, MessageEntity, TelegraphEntity,
+};
 use crate::tags::EhTagTransDB;
 
 pub fn cmd_challenge_keyboard(
@@ -41,7 +43,11 @@ pub async fn cmd_best_text(
     for (score, title, gid) in GalleryEntity::list(from_date, to_date, 20, offset).await? {
         let url = gallery_preview_url(channel.clone(), gid).await?;
         // 🌟 已加上 HTML 轉義
-        text.push_str(&format!("\n<code>{:.2}</code> - {}", score * 100., link(&url, &escape(&title))));
+        text.push_str(&format!(
+            "\n<code>{:.2}</code> - {}",
+            score * 100.,
+            link(&url, &escape(&title))
+        ));
     }
 
     Ok(text)
@@ -67,7 +73,7 @@ pub fn poll_keyboard(
     poll_id: i64,
     votes: &[i32; 5],
     gallery_id: i32,
-    fav_count: i32, 
+    fav_count: i32,
 ) -> InlineKeyboardMarkup {
     let sum = votes.iter().sum::<i32>();
     let votes: Box<dyn Iterator<Item = f32>> = if sum == 0 {
@@ -77,8 +83,13 @@ pub fn poll_keyboard(
     };
 
     // 🌟 帶人數的動態文字
-    let fav_text = if fav_count > 0 { format!("⭐ 收藏本檔案 ({})", fav_count) } else { "⭐ 收藏本檔案".to_string() };
-    let collect_btn_row = vec![InlineKeyboardButton::callback(fav_text, CallbackData::FavToggle(gallery_id).pack())];
+    let fav_text = if fav_count > 0 {
+        format!("⭐ 收藏本檔案 ({})", fav_count)
+    } else {
+        "⭐ 收藏本檔案".to_string()
+    };
+    let collect_btn_row =
+        vec![InlineKeyboardButton::callback(fav_text, CallbackData::FavToggle(gallery_id).pack())];
 
     let rating_rows = ["我瞎了", "不咋样", "还行吧", "不错哦", "太棒了"]
         .iter()
@@ -117,15 +128,24 @@ pub async fn fav_text(user_id: i64, page: i32, channel: Recipient) -> Result<Str
     if count == 0 {
         return Ok("<b>📚 您的個人收藏夾</b>\n\n您目前還沒有收藏任何檔案哦！\n點擊畫廊底部的 <b>[⭐ 收藏]</b> 按鈕即可加入。".to_string());
     }
-    
+
     let total_pages = (count + limit - 1) / limit;
     let current_page = page.clamp(0, total_pages - 1);
-    let mut text = format!("📚 <b>您的個人收藏夾</b> (第 {}/{} 頁，共 {} 本)\n\n", current_page + 1, total_pages, count);
+    let mut text = format!(
+        "📚 <b>您的個人收藏夾</b> (第 {}/{} 頁，共 {} 本)\n\n",
+        current_page + 1,
+        total_pages,
+        count
+    );
 
     let list = FavoriteEntity::list(user_id, limit, current_page).await?;
     for (gid, title, score) in list {
         let url = gallery_preview_url(channel.clone(), gid).await?;
-        text.push_str(&format!("<code>{:.2}</code> - {}\n", score * 100., link(&url, &escape(&title))));
+        text.push_str(&format!(
+            "<code>{:.2}</code> - {}\n",
+            score * 100.,
+            link(&url, &escape(&title))
+        ));
     }
     Ok(text)
 }
@@ -134,7 +154,11 @@ pub fn fav_keyboard(page: i32, total: i32) -> InlineKeyboardMarkup {
     let limit = 15;
     let total_pages = (total + limit - 1) / limit;
     let mut row = vec![];
-    if page > 0 { row.push(InlineKeyboardButton::callback("<", CallbackData::FavPage(page - 1).pack())); }
-    if page < total_pages - 1 { row.push(InlineKeyboardButton::callback(">", CallbackData::FavPage(page + 1).pack())); }
+    if page > 0 {
+        row.push(InlineKeyboardButton::callback("<", CallbackData::FavPage(page - 1).pack()));
+    }
+    if page < total_pages - 1 {
+        row.push(InlineKeyboardButton::callback(">", CallbackData::FavPage(page + 1).pack()));
+    }
     InlineKeyboardMarkup::new(if row.is_empty() { vec![] } else { vec![row] })
 }

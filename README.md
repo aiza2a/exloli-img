@@ -1,117 +1,204 @@
 # EXLOLI-IMGX
 
-<p align="center">
-  <img src="[https://img.shields.io/badge/Rust-000000?style=for-the-badge&logo=rust&logoColor=white](https://img.shields.io/badge/Rust-000000?style=for-the-badge&logo=rust&logoColor=white)" alt="Rust">
-  <img src="[https://img.shields.io/badge/Teloxide-blue?style=for-the-badge](https://img.shields.io/badge/Teloxide-blue?style=for-the-badge)" alt="Teloxide">
-  <img src="[https://img.shields.io/badge/License-MIT-green?style=for-the-badge](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)" alt="License">
-</p>
+基于 Rust 和 Teloxide 的 E-Hentai / ExHentai Telegram 频道发布与画廊管理机器人。
 
-基于 **Rust** 与 **Teloxide** 构建的新一代 E-Hentai / ExHentai Telegram 频道自动推送与资源管理机器人。
+它会按配置定期扫描 E-Hentai / ExHentai 搜索结果，下载尚未收录画廊的图片到 K-Vault 图床，生成 Telegraph 图片预览页，并发布到 Telegram 频道。机器人同时提供画廊查询、排行、随机检索、收藏、评分和管理员维护命令。
 
-本系统旨在提供高度稳定且自动化的同人志资源抓取、图床中转、即时预览生成，以及丰富的 Telegram 群组与私聊交互管理功能。
+> 本项目需要有效的 ExHentai 登录 Cookie、Telegram Bot Token、Telegraph Access Token 和 K-Vault API Token。它们均属于敏感数据，必须只保存在本机 `config.toml` 中，不能提交到 Git。
 
----
+## 功能
 
-## ✨ 核心特性
+- 定时扫描：按自定义 E-Hentai 搜索条件获取最新画廊。
+- 图片处理：下载画廊图片，上传到 K-Vault，并以图片哈希去重。
+- 内容发布：创建 Telegraph 预览文章，向指定 Telegram 频道发送标题、标签、预览和来源链接。
+- 数据管理：使用 SQLite 保存画廊、图片、频道消息、Telegraph 链接、评分、收藏和挑战记录。
+- 社群互动：频道消息转发到讨论组后可生成评分面板；支持排行榜、个人收藏、随机画廊和猜画师。
+- 管理维护：管理员可上传新画廊、软删除、硬删除和重建预览。
 
-* **🚀 全自动资源流转**
-  支持定时扫描 E-Hentai 资源，通过多线程并发将本地获取的图片转存至 ImgBB 图床，自动生成 Telegraph 即时预览文章并推送到目标 Telegram 频道。
-* **📂 个人收藏夹系统**
-  支持用户在频道、群组或私聊中一键收藏目标画廊，系统提供独立分页式的专属收藏列表 (`/fav`)，并支持在公共面板动态展示单一画廊的全网收藏热度。
-* **🔍 灵活的标签检索**
-  内置 E-Hentai 中英标签翻译数据库，允许用户通过单一或多重组合标签，在图库中随机检索画廊资源 (`/random`)，并支持设定单次检索上限。
-* **📊 社群互动与数据统计**
-  频道消息转发至讨论组后，将自动生成带有实时打分系统的投票面板。提供按时间维度计算的热度排行榜 (`/best`) 以及系统整体运行数据监控 (`/stats`)。
-* **🛠️ 完备的维护干预机制**
-  面向管理员提供硬/软删除机制、元数据强制同步与图文缺失自动修复工具，确保内容分发体系的可靠性。
+## 运行流程
 
----
-
-## 🎮 指令参考
-
-### 👥 公共指令
-| 指令 | 描述 |
-| :--- | :--- |
-| `/upload <URL>` | 根据 E 站 URL 上传系统中已收录的特定画廊 |
-| `/update <URL>` | 依据传入的 URL 或回复消息，同步更新指定画廊的元数据 |
-| `/query <URL>` | 查验目标画廊的收录状态及详细后台评分信息 |
-| `/best <天1> <天2>` | 检索指定时间跨度内的优质画廊排行榜 (示例: `/best 30 0`) |
-| `/random [标签] [数量]` | 基于输入标签随机提取特定数量的画廊 (最高提取上限 10 本) |
-| `/fav` | 调出并管理当前交互用户的个人收藏夹 |
-| `/challenge` | 触发社群专用的画师猜谜游戏 |
-| `/stats` | 获取系统总收录量、总图片量及平均页面数等统计指标 |
-| `/ping` | 验证服务进程在线状态与响应延迟 |
-| `/help` | 输出对应权限级别的指令帮助清单 |
-
-### 🛡️ 管理员指令
-| 指令 | 描述 |
-| :--- | :--- |
-| `/upload <URL>` | 强制解析并上传全新画廊 (无视标准收录限制) |
-| `/delete` | 对当前回复的画廊执行**软删除**操作 (隐藏记录) |
-| `/erase` | 对当前回复的画廊执行**硬删除**操作 (彻底清理数据与缺页记录) |
-| `/recheck` | 检测当前画廊数据完整性并重新生成 Telegraph 预览文章 |
-
----
-
-## 🚀 部署说明
-
-生产环境推荐使用 **Docker** 容器化部署，也可通过 **Cargo** 直接编译构建。
-
-### 方式一：通过 Docker Compose (推荐)
-
-初始化项目目录及必要配置文件：
-
-```bash
-mkdir exloli-next && cd exloli-next
-
-# 获取配置模板与容器编排文件
-wget https://raw.githubusercontent.com/lolishinshi/exloli/master/docker-compose.yml
-wget https://raw.githubusercontent.com/lolishinshi/exloli/master/config.toml.example -O config.toml
-
-# 获取标签翻译数据库
-wget https://github.com/EhTagTranslation/Database/releases/download/v6.7880.1/db.text.json
-
-# 创建 SQLite 数据文件存储占位符
-touch db.sqlite db.sqlite-shm db.sqlite-wal
+```text
+ExHentai 搜索 → 解析画廊 → 下载图片 → K-Vault 上传 → SQLite 建档
+                                              ↓
+                                   Telegraph 预览页 → Telegram 频道
 ```
 
-完善 `config.toml` 配置参数后，启动服务：
-```bash
-docker-compose up -d
+`search_count = 0` 时不会自动扫描和上传，但 Telegram Bot 仍会运行，可用于查询、收藏、评分和管理员维护。
+
+## 部署
+
+生产环境使用 Docker Compose。镜像：`ghcr.io/aiza2a/exloli-imgx:latest`。
+
+### 1. 准备目录和文件
+
+```sh
+mkdir -p exloli-img && cd exloli-img
+curl -fsSLO https://raw.githubusercontent.com/aiza2a/exloli-img/master/docker-compose.yml
+curl -fsSLo config.toml https://raw.githubusercontent.com/aiza2a/exloli-img/master/config.toml.example
+curl -fsSLO https://github.com/EhTagTranslation/Database/releases/latest/download/db.text.json
 ```
 
-### 方式二：通过 Cargo 源码编译
+首次运行前不需要手动创建 SQLite 文件；程序会按 `database_url` 自动创建并执行迁移。
 
-配置 Rust 工具链并构建：
+### 2. 配置 `config.toml`
 
-```bash
-# 部署 Rust 编译环境
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source $HOME/.cargo/env
+至少填写以下字段：
 
-# 编译并安装系统包
-cargo install --git https://github.com/lolishinshi/exloli-next
+- `[exhentai].cookie`：可访问 ExHentai 的完整 Cookie。
+- `[telegraph].access_token`：Telegraph 帐号 Access Token。
+- `[telegram].channel_id`、`group_id`、`auth_group_id`、`bot_id`、`token`。
+- `[kvault].base_url`、`api_token`：K-Vault 服务地址及上传 Token。
 
-# 测试环境变量配置与命令行输出
-exloli-next --help
+建议先设置：
+
+```toml
+[exhentai]
+search_count = 0
 ```
 
----
+确认 Bot 能正常响应 `/ping` 后，再逐步增加 `search_count`。自动扫描会产生 ExHentai、K-Vault、Telegraph 与 Telegram 的外部请求。
 
-## ⚙️ 配置文件指引
+### 3. 启动和查看状态
 
-核心服务依赖于运行目录下的 `config.toml`。请参照以下模块进行初始化配置：
+```sh
+docker compose pull
+docker compose up -d
+docker compose ps
+docker compose logs -f --tail=100
+```
 
-* **Telegram 凭据**：正确填写机器人 Token 以及接收推送的目标 Channel ID。
-* **ImgBB 图床**：配置至少一个或多个有效的 API Keys (系统内置多 Key 轮询上传机制)。
-* **E-Hentai 认证**：提供含有效登录状态的 Cookie 键值 (`igneous`, `ipb_member_id`, `ipb_pass_hash`)。
-* **Telegraph**：提供具备发布文章权限的 Access Token 密钥。
+升级镜像时不要使用 `docker compose down -v`；这会删除具名 volume。当前 Compose 将 SQLite、标签翻译文件和配置文件作为宿主机文件挂载，升级前仍建议先备份。
 
----
+## 配置参考
 
-## 💾 数据迁移
+```toml
+log_level = "info,sqlx=warn,teloxide=error,exloli_next=debug"
+threads_num = 3
+interval = "1h"
+database_url = "db.sqlite"
 
-若由旧版 exloli 系统进行升级迁移，直接保留原持久化存储的 `db.sqlite` 并在新环境下挂载运行即可。系统启动时将自动识别数据结构差异并执行底层重构映射 (Migrations)。
+[exhentai]
+cookie = "ipb_member_id=...; ipb_pass_hash=...; igneous=..."
+search_params = [
+  ["f_cats", "577"],
+  ["f_search", "language:Chinese"]
+]
+search_count = 0
+trans_file = "db.text.json"
 
-> [!WARNING]
-> **警告**：建议在任何迁移操作前，对原 SQLite 文件及其日志副本进行完整备份。
+[telegraph]
+access_token = "..."
+author_name = "exloli"
+author_url = "https://t.me/your_channel"
+
+[telegram]
+channel_id = "@your_channel"
+group_id = -1000000000000
+auth_group_id = -1000000000000
+bot_id = "your_bot_username"
+token = "123456:telegram-bot-token"
+
+[kvault]
+base_url = "https://files.example.com"
+api_token = "..."
+```
+
+### 字段说明
+
+| 字段 | 含义 |
+|---|---|
+| `threads_num` | 图片下载/上传并发基数。建议从 1–3 开始。 |
+| `interval` | 自动扫描间隔，例如 `1h`、`30m`。 |
+| `search_params` | 传给 E-Hentai 搜索页的参数列表。 |
+| `search_count` | 每次扫描最多处理的画廊数；`0` 表示关闭自动扫描。 |
+| `trans_file` | EhTagTranslation 的 `db.text.json` 路径。 |
+| `channel_id` | 发布频道，可为 `@channel_username` 或 Telegram 数字 ID。 |
+| `group_id` | 讨论组数字 ID；用于管理员识别和评分互动。 |
+| `auth_group_id` | 使用审核入群链接时要自动批准成员的群组 ID；不用该功能时仍填有效数字 ID。 |
+| `kvault.base_url` | K-Vault 根地址，不要以 `/` 结尾。 |
+
+## Telegram 命令
+
+### 公共命令
+
+| 命令 | 用途 |
+|---|---|
+| `/ping` | 检查 Bot 是否在线。 |
+| `/help` | 查看命令说明。 |
+| `/query <URL>` | 查询画廊收录状态和评分信息。 |
+| `/best <天数起点> <天数终点>` | 查询指定时间区间的排行榜，例如 `/best 30 0`。 |
+| `/random [标签] [数量]` | 从已收录画廊中随机检索，单次上限 10。 |
+| `/fav` | 查看和管理个人收藏夹。 |
+| `/challenge` | 发起画师猜谜。 |
+| `/stats` | 查看收录和图片统计。 |
+| `/upload <URL>` | 重新发布已收录画廊；不能用来让普通用户添加新画廊。 |
+
+### 管理员命令
+
+管理员身份以 `group_id` 对应群组中的 Telegram 管理员权限判定。
+
+| 命令 | 用途 |
+|---|---|
+| `/upload <URL>` | 上传新的 E-Hentai / ExHentai 画廊。 |
+| `/delete` | 回复频道转发消息后软删除画廊记录。 |
+| `/erase` | 回复频道转发消息后删除画廊及对应消息记录。 |
+| `/recheck` | 回复频道转发消息后检查图片和 Telegraph 预览。 |
+
+## 数据与备份
+
+部署目录中的持久化文件：
+
+| 文件 | 用途 |
+|---|---|
+| `config.toml` | 运行配置和敏感凭据。 |
+| `db.sqlite` | SQLite 主数据库。 |
+| `db.sqlite-wal` / `db.sqlite-shm` | SQLite WAL 临时文件；运行中可能存在。 |
+| `db.text.json` | 标签翻译数据库。 |
+
+升级、迁移、硬删除或手工处理数据库前，先停止容器并备份数据库及 WAL 文件：
+
+```sh
+docker compose stop
+cp -a db.sqlite db.sqlite-wal db.sqlite-shm backups/ 2>/dev/null || true
+docker compose up -d
+```
+
+不要把 `config.toml`、数据库文件或 Cookie 上传到 Issue、日志平台或 Git 仓库。
+
+## 升级
+
+```sh
+docker compose pull
+docker compose up -d --force-recreate --remove-orphans
+docker compose ps
+```
+
+升级后通过 `/ping` 和容器日志确认服务状态。若升级后异常，先使用备份的数据库和已知可用镜像 tag 回退，不要删除现有 `db.sqlite`。
+
+## 从源码构建
+
+仅适用于开发环境。需要 Rust 工具链和系统构建依赖。
+
+```sh
+git clone https://github.com/aiza2a/exloli-img.git
+cd exloli-img
+cp config.toml.example config.toml
+cargo run --bin exloli
+```
+
+运行前必须完成配置；不要提交本地 `config.toml`。
+
+## 开发与 CI
+
+GitHub Actions 在 GitHub runner 上执行格式检查、Clippy、单元测试、发布构建与 Docker 镜像构建；不会在使用者部署服务器上自动运行这些检查。
+
+本仓库的发布镜像由标签推送触发。发布前建议创建版本标签，例如：
+
+```sh
+git tag v0.4.2
+git push origin v0.4.2
+```
+
+## 许可证
+
+本项目采用 [MIT License](LICENSE)。
