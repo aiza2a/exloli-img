@@ -23,27 +23,30 @@ where
     })
 }
 
-pub fn filter_public_command_rate<Output>() -> Handler<'static, DependencyMap, Output, DpHandlerDescription>
+pub fn filter_public_command_rate<Output>(
+) -> Handler<'static, DependencyMap, Output, DpHandlerDescription>
 where
     Output: Send + Sync + 'static,
 {
-    dptree::filter_async(|message: Message, bot: Bot, limiter: super::utils::RateLimiter| async move {
-        let Some(user) = message.from() else {
-            return false;
-        };
-        let Some(wait) = limiter.insert(user.id) else {
-            return true;
-        };
+    dptree::filter_async(
+        |message: Message, bot: Bot, limiter: super::utils::RateLimiter| async move {
+            let Some(user) = message.from() else {
+                return false;
+            };
+            let Some(wait) = limiter.insert(user.id) else {
+                return true;
+            };
 
-        let _ = bot
-            .send_message(
-                message.chat.id,
-                format!("操作频率过高，请等待 {} 秒后再试", wait.as_secs().max(1)),
-            )
-            .reply_to_message_id(message.id)
-            .await;
-        false
-    })
+            let _ = bot
+                .send_message(
+                    message.chat.id,
+                    format!("操作频率过高，请等待 {} 秒后再试", wait.as_secs().max(1)),
+                )
+                .reply_to_message_id(message.id)
+                .await;
+            false
+        },
+    )
 }
 
 pub fn filter_channel_msg<Output>() -> Handler<'static, DependencyMap, Output, DpHandlerDescription>

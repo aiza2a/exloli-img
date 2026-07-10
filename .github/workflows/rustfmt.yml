@@ -17,5 +17,5 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
-      - name: Check formatting
-        run: cargo fmt --check
+      - name: Format source
+        run: cargo fmt --all

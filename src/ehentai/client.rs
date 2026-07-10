@@ -266,7 +266,8 @@ impl EhClient {
             Ok((fileindex, url))
         } else if nl.is_some() {
             let retry_page = page.with_nl(
-                nl.as_deref().ok_or_else(|| EhError::UnexpectedPage("retry token missing".to_string()))?,
+                nl.as_deref()
+                    .ok_or_else(|| EhError::UnexpectedPage("retry token missing".to_string()))?,
             );
             let resp = send!(self.0.get(retry_page.url()))?;
             let html = Html::parse_document(&resp.text().await?);
