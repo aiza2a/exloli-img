@@ -7,6 +7,7 @@ use teloxide::types::MessageId;
 use tracing::info;
 
 use crate::bot::command::AdminCommand;
+use crate::bot::filter::filter_admin_msg;
 use crate::bot::handlers::cmd_update;
 use crate::bot::Bot;
 use crate::database::{GalleryEntity, MessageEntity};
