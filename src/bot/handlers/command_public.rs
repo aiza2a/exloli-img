@@ -1,3 +1,4 @@
+use crate::bot::utils::CallbackData;
 use anyhow::{anyhow, Result};
 use rand::prelude::*;
 use reqwest::Url;
@@ -6,23 +7,23 @@ use teloxide::dispatching::DpHandlerDescription;
 use teloxide::dptree::case;
 use teloxide::prelude::*;
 use teloxide::types::InputFile;
+use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, ParseMode};
 use teloxide::utils::command::BotCommands;
 use teloxide::utils::html::escape;
 use tracing::info;
-use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, ParseMode};
-use crate::bot::utils::CallbackData;
 
 use crate::bot::command::{AdminCommand, PublicCommand};
 use crate::bot::handlers::{
-    cmd_best_keyboard, cmd_best_text, cmd_challenge_keyboard, gallery_preview_url, fav_text, fav_keyboard
+    cmd_best_keyboard, cmd_best_text, cmd_challenge_keyboard, fav_keyboard, fav_text,
+    gallery_preview_url,
 };
 use crate::bot::scheduler::Scheduler;
 use crate::bot::utils::{ChallengeLocker, ChallengeProvider};
 use crate::bot::Bot;
 use crate::config::Config;
 use crate::database::{GalleryEntity, ImageEntity, MessageEntity, PollEntity};
-use crate::ehentai::GalleryInfo; 
 use crate::ehentai::EhGalleryUrl;
+use crate::ehentai::GalleryInfo;
 use crate::tags::EhTagTransDB;
 use crate::uploader::ExloliUploader;
 use crate::{reply_to, try_with_reply};
@@ -60,8 +61,8 @@ async fn cmd_upload(
 ) -> Result<()> {
     if url_text.trim().is_empty() {
         reply_to!(
-            bot, 
-            msg, 
+            bot,
+            msg,
             "<b>使用說明：</b>\n請在指令後附上 E 站畫廊鏈接。\n\n<b>示例：</b>\n<code>/upload https://exhentai.org/g/123456/abcdef/</code>"
         ).await?;
         return Ok(());
@@ -70,15 +71,21 @@ async fn cmd_upload(
     let gallery = match EhGalleryUrl::from_str(&url_text) {
         Ok(v) => v,
         Err(_) => {
-            reply_to!(bot, msg, "❌ <b>無效的鏈接</b>\n請檢查是否為正確的 E-Hentai 或 ExHentai 畫廊網址。").await?;
+            reply_to!(
+                bot,
+                msg,
+                "❌ <b>無效的鏈接</b>\n請檢查是否為正確的 E-Hentai 或 ExHentai 畫廊網址。"
+            )
+            .await?;
             return Ok(());
         }
     };
 
     info!("{}: /upload {}", msg.from().unwrap().id, gallery);
-    
+
     if GalleryEntity::get(gallery.id()).await?.is_none() {
-        reply_to!(bot, msg, "⚠️ <b>權限不足</b>\n非管理員只能上傳機器人數據庫中已存在的畫廊。").await?;
+        reply_to!(bot, msg, "⚠️ <b>權限不足</b>\n非管理員只能上傳機器人數據庫中已存在的畫廊。")
+            .await?;
     } else {
         try_with_reply!(bot, msg, uploader.try_upload(&gallery, true).await);
     }
@@ -97,13 +104,13 @@ async fn cmd_challenge(
     let mut challenge = challange_provider.get_challenge().await.unwrap();
     let answer = challenge[0].clone();
     challenge.shuffle(&mut thread_rng());
-    
+
     let url = if answer.url.starts_with("http") {
         answer.url.clone()
     } else {
         format!("https://telegra.ph{}", answer.url)
     };
-    
+
     let id = locker.add_challenge(answer.id, answer.page, answer.artist.clone());
     let keyboard = cmd_challenge_keyboard(id, &challenge, &trans);
     let reply = bot
@@ -127,11 +134,11 @@ async fn cmd_best(
     scheduler: Scheduler,
 ) -> Result<()> {
     let parts: Vec<&str> = args.split_whitespace().collect();
-    
+
     if parts.len() != 2 {
         reply_to!(
-            bot, 
-            msg, 
+            bot,
+            msg,
             "<b>使用說明：</b>\n查詢指定時間範圍內的熱門本子。\n\n<b>格式：</b>\n<code>/best [天數1] [天數2]</code>\n\n<b>示例：</b>\n<code>/best 30 0</code> (查詢最近30天)\n<code>/best 30 60</code> (查詢上個月)"
         ).await?;
         return Ok(());
@@ -139,20 +146,26 @@ async fn cmd_best(
 
     let day1: i32 = match parts[0].parse() {
         Ok(v) => v,
-        Err(_) => { reply_to!(bot, msg, "❌ 第一個參數必須是數字").await?; return Ok(()); }
+        Err(_) => {
+            reply_to!(bot, msg, "❌ 第一個參數必須是數字").await?;
+            return Ok(());
+        }
     };
     let day2: i32 = match parts[1].parse() {
         Ok(v) => v,
-        Err(_) => { reply_to!(bot, msg, "❌ 第二個參數必須是數字").await?; return Ok(()); }
+        Err(_) => {
+            reply_to!(bot, msg, "❌ 第二個參數必須是數字").await?;
+            return Ok(());
+        }
     };
 
     info!("{}: /best {} {}", msg.from().unwrap().id, day1, day2);
-    
+
     let text = cmd_best_text(day1, day2, 0, cfg.telegram.channel_id).await?;
     let keyboard = cmd_best_keyboard(day1, day2, 0);
     let reply =
         reply_to!(bot, msg, text).reply_markup(keyboard).disable_web_page_preview(true).await?;
-        
+
     if !msg.chat.is_private() {
         scheduler.delete_msg(msg.chat.id, msg.id, 120);
         scheduler.delete_msg(msg.chat.id, reply.id, 120);
@@ -160,15 +173,20 @@ async fn cmd_best(
     Ok(())
 }
 
-async fn cmd_update(bot: Bot, msg: Message, uploader: ExloliUploader, url_text: String) -> Result<()> {
+async fn cmd_update(
+    bot: Bot,
+    msg: Message,
+    uploader: ExloliUploader,
+    url_text: String,
+) -> Result<()> {
     let msg_id = if url_text.trim().is_empty() {
         msg.reply_to_message()
             .and_then(|msg| msg.forward_from_message_id())
             .ok_or_else(|| anyhow!("請輸入 URL 或回覆一條畫廊消息"))
     } else {
         match Url::parse(&url_text) {
-             Ok(u) => Ok(u),
-             Err(_) => Err(anyhow!("無效的 URL")),
+            Ok(u) => Ok(u),
+            Err(_) => Err(anyhow!("無效的 URL")),
         }
         .and_then(|u| {
             u.path_segments()
@@ -181,27 +199,29 @@ async fn cmd_update(bot: Bot, msg: Message, uploader: ExloliUploader, url_text: 
     let msg_id = match msg_id {
         Ok(id) => id,
         Err(_) => {
-             reply_to!(bot, msg, "<b>使用說明：</b>\n請在指令後附上 URL，或回覆一條頻道轉發的畫廊消息。\n\n<b>示例：</b>\n<code>/update https://exhentai.org/g/xxxxx/xxxx/</code>").await?;
-             return Ok(());
+            reply_to!(bot, msg, "<b>使用說明：</b>\n請在指令後附上 URL，或回覆一條頻道轉發的畫廊消息。\n\n<b>示例：</b>\n<code>/update https://exhentai.org/g/xxxxx/xxxx/</code>").await?;
+            return Ok(());
         }
     };
 
     info!("{}: /update (msg_id/url: {})", msg.from().unwrap().id, msg_id);
 
-    let msg_entity = MessageEntity::get(msg_id).await?.ok_or_else(|| anyhow!("找不到對應的消息記錄"))?;
-    let gl_entity =
-        GalleryEntity::get(msg_entity.gallery_id).await?.ok_or_else(|| anyhow!("找不到對應的畫廊記錄"))?;
+    let msg_entity =
+        MessageEntity::get(msg_id).await?.ok_or_else(|| anyhow!("找不到對應的消息記錄"))?;
+    let gl_entity = GalleryEntity::get(msg_entity.gallery_id)
+        .await?
+        .ok_or_else(|| anyhow!("找不到對應的畫廊記錄"))?;
 
     let reply = reply_to!(bot, msg, "正在更新元數據...").await?;
 
     if let Err(e) = uploader.recheck(vec![gl_entity.clone()]).await {
         reply_to!(bot, msg, format!("Recheck 失敗: {}", e)).await?;
     }
-    
+
     if let Err(e) = uploader.try_update(&gl_entity.url(), false).await {
-         reply_to!(bot, msg, format!("Update 失敗: {}", e)).await?;
+        reply_to!(bot, msg, format!("Update 失敗: {}", e)).await?;
     }
-    
+
     bot.edit_message_text(msg.chat.id, reply.id, "✅ 更新完成").await?;
 
     Ok(())
@@ -232,10 +252,12 @@ async fn cmd_query(bot: Bot, msg: Message, cfg: Config, url_text: String) -> Res
     };
 
     info!("{}: /query {}", msg.from().unwrap().id, gallery);
-    
+
     match GalleryEntity::get(gallery.id()).await? {
         Some(gallery) => {
-            let poll = PollEntity::get_by_gallery(gallery.id).await?.ok_or_else(|| anyhow!("找不到投票記錄"))?;
+            let poll = PollEntity::get_by_gallery(gallery.id)
+                .await?
+                .ok_or_else(|| anyhow!("找不到投票記錄"))?;
             let preview = gallery_preview_url(cfg.telegram.channel_id, gallery.id).await?;
             let url = gallery.url().url();
             reply_to!(
@@ -257,19 +279,25 @@ async fn cmd_query(bot: Bot, msg: Message, cfg: Config, url_text: String) -> Res
 }
 
 // 注意這裡參數多加了一個 trans: EhTagTransDB
-async fn cmd_random(bot: Bot, msg: Message, cfg: Config, trans: EhTagTransDB, args: String) -> Result<()> {
+async fn cmd_random(
+    bot: Bot,
+    msg: Message,
+    cfg: Config,
+    trans: EhTagTransDB,
+    args: String,
+) -> Result<()> {
     info!("{}: /random {}", msg.from().unwrap().id, args);
-    
+
     let mut parts: Vec<&str> = args.split_whitespace().collect();
     let mut count = 1;
-    
+
     if let Some(last) = parts.last() {
         if let Ok(c) = last.parse::<usize>() {
             count = c;
-            parts.pop(); 
+            parts.pop();
         }
     }
-    
+
     count = count.clamp(1, 10);
     let tags: Vec<String> = parts.into_iter().map(|s| s.to_string()).collect();
 
@@ -292,10 +320,11 @@ async fn cmd_random(bot: Bot, msg: Message, cfg: Config, trans: EhTagTransDB, ar
                     Some(p) => p.rank().await? * 100.,
                     None => 0.0,
                 };
-                
-                let preview = gallery_preview_url(cfg.telegram.channel_id.clone(), gallery.id).await?;
+
+                let preview =
+                    gallery_preview_url(cfg.telegram.channel_id.clone(), gallery.id).await?;
                 let url = gallery.url().url();
-                
+
                 let text = format!(
                     "🎲 <b>隨機抽取結果</b>\n\n<b>{}</b>\n\n📄 <b>預覽：</b>{}\n🔗 <b>地址：</b>{}\n⭐️ <b>評分：</b>{:.2}（{:.2}%）",
                     escape(gallery.title_jp.as_ref().unwrap_or(&gallery.title)), // 🌟加上 escape
@@ -307,17 +336,31 @@ async fn cmd_random(bot: Bot, msg: Message, cfg: Config, trans: EhTagTransDB, ar
 
                 // 🌟 為抽出來的每本本子加上收藏按鈕
                 // 🌟 動態獲取人數並生成按鈕
-                let fav_count = crate::database::FavoriteEntity::count_by_gallery(gallery.id).await.unwrap_or(0);
-                let fav_text = if fav_count > 0 { format!("⭐ 收藏 ({})", fav_count) } else { "⭐ 收藏".to_string() };
-                let fav_btn = teloxide::types::InlineKeyboardButton::callback(fav_text, CallbackData::FavToggle(gallery.id).pack());
+                let fav_count = crate::database::FavoriteEntity::count_by_gallery(gallery.id)
+                    .await
+                    .unwrap_or(0);
+                let fav_text = if fav_count > 0 {
+                    format!("⭐ 收藏 ({})", fav_count)
+                } else {
+                    "⭐ 收藏".to_string()
+                };
+                let fav_btn = teloxide::types::InlineKeyboardButton::callback(
+                    fav_text,
+                    CallbackData::FavToggle(gallery.id).pack(),
+                );
 
                 let mut keyboard_rows = vec![];
                 if i == count - 1 {
                     let mut tags_str = tags.join(" ");
-                    if tags_str.len() > 40 { tags_str = tags_str.chars().take(12).collect(); }
+                    if tags_str.len() > 40 {
+                        tags_str = tags_str.chars().take(12).collect();
+                    }
                     keyboard_rows.push(vec![
-                        teloxide::types::InlineKeyboardButton::callback("🎲 再來一個本子", CallbackData::RandomAnother(tags_str).pack()),
-                        fav_btn // 🌟 與再來一本並排
+                        teloxide::types::InlineKeyboardButton::callback(
+                            "🎲 再來一個本子",
+                            CallbackData::RandomAnother(tags_str).pack(),
+                        ),
+                        fav_btn, // 🌟 與再來一本並排
                     ]);
                 } else {
                     keyboard_rows.push(vec![fav_btn]);
@@ -326,15 +369,19 @@ async fn cmd_random(bot: Bot, msg: Message, cfg: Config, trans: EhTagTransDB, ar
 
                 let images = ImageEntity::get_by_gallery_id(gallery.id).await?;
                 if let Some(img) = images.first() {
-                    let mut req = bot.send_photo(msg.chat.id, InputFile::url(img.url().parse()?))
-                                     .caption(&text)
-                                     .parse_mode(ParseMode::Html); 
-                    if let Some(kb) = keyboard { req = req.reply_markup(kb); }
+                    let mut req = bot
+                        .send_photo(msg.chat.id, InputFile::url(img.url().parse()?))
+                        .caption(&text)
+                        .parse_mode(ParseMode::Html);
+                    if let Some(kb) = keyboard {
+                        req = req.reply_markup(kb);
+                    }
                     req.await?;
                 } else {
-                    let mut req = bot.send_message(msg.chat.id, &text)
-                                     .parse_mode(ParseMode::Html);
-                    if let Some(kb) = keyboard { req = req.reply_markup(kb); }
+                    let mut req = bot.send_message(msg.chat.id, &text).parse_mode(ParseMode::Html);
+                    if let Some(kb) = keyboard {
+                        req = req.reply_markup(kb);
+                    }
                     req.await?;
                 }
             }
@@ -348,22 +395,20 @@ async fn cmd_random(bot: Bot, msg: Message, cfg: Config, trans: EhTagTransDB, ar
                 break;
             }
         }
-        
-        if count > 1 { tokio::time::sleep(tokio::time::Duration::from_millis(300)).await; }
+
+        if count > 1 {
+            tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+        }
     }
     Ok(())
 }
 async fn cmd_stats(bot: Bot, msg: Message) -> Result<()> {
     info!("{}: /stats", msg.from().unwrap().id);
-    
+
     let gallery_count = GalleryEntity::count().await?;
     let image_count = ImageEntity::count().await?;
-    
-    let avg_pages = if gallery_count > 0 {
-        image_count as f64 / gallery_count as f64
-    } else {
-        0.0
-    };
+
+    let avg_pages = if gallery_count > 0 { image_count as f64 / gallery_count as f64 } else { 0.0 };
 
     let text = format!(
         "📊 <b>夏萊閱覽室數據統計</b>\n\n📚 <b>藏書總量：</b> <code>{}</code> 本\n🖼 <b>圖片總數：</b> <code>{}</code> 張\n📄 <b>平均頁數：</b> <code>{:.1}</code> 頁/本\n\n<i>Bot 正在持續運轉中...</i>",
@@ -379,11 +424,11 @@ async fn cmd_stats(bot: Bot, msg: Message) -> Result<()> {
 async fn cmd_fav(bot: Bot, msg: Message, cfg: Config) -> Result<()> {
     info!("{}: /fav", msg.from().unwrap().id);
     let user_id = msg.from().unwrap().id.0 as i64;
-    
+
     let text = fav_text(user_id, 0, cfg.telegram.channel_id.clone()).await?;
     let count = crate::database::FavoriteEntity::count(user_id).await?;
     let keyboard = fav_keyboard(0, count);
-    
+
     reply_to!(bot, msg, text)
         .reply_markup(keyboard)
         .parse_mode(ParseMode::Html)

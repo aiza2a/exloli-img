@@ -33,7 +33,15 @@ async fn cmd_recheck(bot: Bot, msg: Message, uploader: ExloliUploader) -> Result
     let reply_to = match msg.reply_to_message() {
         Some(r) => r,
         None => {
-            reply_to!(bot, msg, format!("<b>⚠️ 操作無效</b>\n{i}請「回覆」一條由本頻道轉發的消息來執行單獨檢測。", i = INDENT)).await?;
+            reply_to!(
+                bot,
+                msg,
+                format!(
+                    "<b>⚠️ 操作無效</b>\n{i}請「回覆」一條由本頻道轉發的消息來執行單獨檢測。",
+                    i = INDENT
+                )
+            )
+            .await?;
             return Ok(());
         }
     };
@@ -42,7 +50,12 @@ async fn cmd_recheck(bot: Bot, msg: Message, uploader: ExloliUploader) -> Result
     let channel_msg = match reply_to.forward_from_message_id() {
         Some(id) => id,
         None => {
-            reply_to!(bot, msg, format!("<b>⚠️ 錯誤</b>\n{i}該消息不是頻道轉發，無法定位畫廊。", i = INDENT)).await?;
+            reply_to!(
+                bot,
+                msg,
+                format!("<b>⚠️ 錯誤</b>\n{i}該消息不是頻道轉發，無法定位畫廊。", i = INDENT)
+            )
+            .await?;
             return Ok(());
         }
     };
@@ -51,7 +64,12 @@ async fn cmd_recheck(bot: Bot, msg: Message, uploader: ExloliUploader) -> Result
     let msg_entity = match MessageEntity::get(channel_msg).await? {
         Some(m) => m,
         None => {
-            reply_to!(bot, msg, format!("<b>⚠️ 數據缺失</b>\n{i}數據庫中找不到該消息的記錄。", i = INDENT)).await?;
+            reply_to!(
+                bot,
+                msg,
+                format!("<b>⚠️ 數據缺失</b>\n{i}數據庫中找不到該消息的記錄。", i = INDENT)
+            )
+            .await?;
             return Ok(());
         }
     };
@@ -60,14 +78,24 @@ async fn cmd_recheck(bot: Bot, msg: Message, uploader: ExloliUploader) -> Result
     let gl_entity = match GalleryEntity::get(msg_entity.gallery_id).await? {
         Some(g) => g,
         None => {
-            reply_to!(bot, msg, format!("<b>⚠️ 數據缺失</b>\n{i}找不到對應的畫廊記錄。", i = INDENT)).await?;
+            reply_to!(
+                bot,
+                msg,
+                format!("<b>⚠️ 數據缺失</b>\n{i}找不到對應的畫廊記錄。", i = INDENT)
+            )
+            .await?;
             return Ok(());
         }
     };
 
     // 5. 針對這單個畫廊執行 recheck
-    reply_to!(bot, msg, format!("<b>🔄 正在重新檢測</b>\n{i}畫廊 ID: <code>{}</code>", gl_entity.id, i = INDENT)).await?;
-    
+    reply_to!(
+        bot,
+        msg,
+        format!("<b>🔄 正在重新檢測</b>\n{i}畫廊 ID: <code>{}</code>", gl_entity.id, i = INDENT)
+    )
+    .await?;
+
     // 這裡把 gl_entity 裝進 vec! 裡傳過去，這樣就只會檢測這一個了！
     try_with_reply!(bot, msg, uploader.recheck(vec![gl_entity]).await);
     Ok(())
@@ -80,7 +108,12 @@ async fn cmd_upload(
     url_text: String,
 ) -> Result<()> {
     if url_text.trim().is_empty() {
-        reply_to!(bot, msg, format!("<b>👮‍♂️ 管理員上傳提示</b>\n{i}用法：<code>/upload [E站URL]</code>", i = INDENT)).await?;
+        reply_to!(
+            bot,
+            msg,
+            format!("<b>👮‍♂️ 管理員上傳提示</b>\n{i}用法：<code>/upload [E站URL]</code>", i = INDENT)
+        )
+        .await?;
         return Ok(());
     }
 
@@ -105,7 +138,15 @@ async fn cmd_delete(bot: Bot, msg: Message, command: AdminCommand) -> Result<()>
     let reply_to = match msg.reply_to_message() {
         Some(r) => r,
         None => {
-            reply_to!(bot, msg, format!("<b>⚠️ 操作無效</b>\n{i}請「回覆」一條由本頻道轉發的消息來執行刪除。", i = INDENT)).await?;
+            reply_to!(
+                bot,
+                msg,
+                format!(
+                    "<b>⚠️ 操作無效</b>\n{i}請「回覆」一條由本頻道轉發的消息來執行刪除。",
+                    i = INDENT
+                )
+            )
+            .await?;
             return Ok(());
         }
     };
@@ -113,7 +154,12 @@ async fn cmd_delete(bot: Bot, msg: Message, command: AdminCommand) -> Result<()>
     let channel = match reply_to.forward_from_chat() {
         Some(c) => c,
         None => {
-            reply_to!(bot, msg, format!("<b>⚠️ 操作無效</b>\n{i}該消息不是頻道轉發，無法定位畫廊。", i = INDENT)).await?;
+            reply_to!(
+                bot,
+                msg,
+                format!("<b>⚠️ 操作無效</b>\n{i}該消息不是頻道轉發，無法定位畫廊。", i = INDENT)
+            )
+            .await?;
             return Ok(());
         }
     };
@@ -121,7 +167,8 @@ async fn cmd_delete(bot: Bot, msg: Message, command: AdminCommand) -> Result<()>
     let channel_msg = match reply_to.forward_from_message_id() {
         Some(id) => id,
         None => {
-            reply_to!(bot, msg, format!("<b>⚠️ 錯誤</b>\n{i}無法讀取轉發的消息 ID。", i = INDENT)).await?;
+            reply_to!(bot, msg, format!("<b>⚠️ 錯誤</b>\n{i}無法讀取轉發的消息 ID。", i = INDENT))
+                .await?;
             return Ok(());
         }
     };
@@ -129,22 +176,41 @@ async fn cmd_delete(bot: Bot, msg: Message, command: AdminCommand) -> Result<()>
     let msg_entity = match MessageEntity::get(channel_msg).await? {
         Some(m) => m,
         None => {
-            reply_to!(bot, msg, format!("<b>⚠️ 數據缺失</b>\n{i}數據庫中找不到該消息的記錄。", i = INDENT)).await?;
+            reply_to!(
+                bot,
+                msg,
+                format!("<b>⚠️ 數據缺失</b>\n{i}數據庫中找不到該消息的記錄。", i = INDENT)
+            )
+            .await?;
             return Ok(());
         }
     };
 
     // 執行刪除
-    let _ = bot.delete_message(reply_to.chat.id, reply_to.id).await; 
-    let _ = bot.delete_message(channel.id, MessageId(msg_entity.id)).await; 
+    let _ = bot.delete_message(reply_to.chat.id, reply_to.id).await;
+    let _ = bot.delete_message(channel.id, MessageId(msg_entity.id)).await;
 
     if matches!(command, AdminCommand::Delete) {
         GalleryEntity::update_deleted(msg_entity.gallery_id, true).await?;
-        reply_to!(bot, msg, format!("<b>✅ 已執行軟刪除</b>\n{i}畫廊 ID: <code>{}</code> 已標記刪除。", msg_entity.gallery_id, i = INDENT)).await?;
+        reply_to!(
+            bot,
+            msg,
+            format!(
+                "<b>✅ 已執行軟刪除</b>\n{i}畫廊 ID: <code>{}</code> 已標記刪除。",
+                msg_entity.gallery_id,
+                i = INDENT
+            )
+        )
+        .await?;
     } else {
         GalleryEntity::delete(msg_entity.gallery_id).await?;
         MessageEntity::delete(channel_msg).await?;
-        reply_to!(bot, msg, format!("<b>💥 已執行硬刪除 (Erase)</b>\n{i}記錄已從庫中徹底抹除。", i = INDENT)).await?;
+        reply_to!(
+            bot,
+            msg,
+            format!("<b>💥 已執行硬刪除 (Erase)</b>\n{i}記錄已從庫中徹底抹除。", i = INDENT)
+        )
+        .await?;
     }
 
     Ok(())

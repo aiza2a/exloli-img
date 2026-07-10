@@ -142,12 +142,12 @@ impl EhTagTransDB {
                 }
             }
         }
-        
+
         results.sort();
         results.dedup(); // 去重
-        // 限制最多返回 10 個英文標籤，防止 SQL 查詢語句過度膨脹
+                         // 限制最多返回 10 個英文標籤，防止 SQL 查詢語句過度膨脹
         results.into_iter().take(10).collect()
-    }   
+    }
 }
 
 #[cfg(test)]
