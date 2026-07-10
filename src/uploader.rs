@@ -15,7 +15,7 @@ use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
 use tokio::task::JoinSet;
 use tokio::time;
-use tracing::{debug, error, info, Instrument};
+use tracing::{debug, error, info, warn, Instrument};
 
 use crate::bot::Bot;
 use crate::config::Config;
@@ -83,11 +83,24 @@ impl ExloliUploader {
     /// 檢查指定畫廊是否已經上傳，如果沒有則進行上傳
     #[tracing::instrument(skip(self))]
     pub async fn try_upload(&self, gallery_url_param: &EhGalleryUrl, check: bool) -> Result<()> {
-        if check
-            && GalleryEntity::check(gallery_url_param.id()).await?
-            && MessageEntity::get_by_gallery(gallery_url_param.id()).await?.is_some()
-        {
-            return Ok(());
+        if check {
+            if let (Some(existing), Some(message)) = (
+                GalleryEntity::get(gallery_url_param.id()).await?,
+                MessageEntity::get_by_gallery(gallery_url_param.id()).await?,
+            ) {
+                let stored_pages = PageEntity::count(existing.id).await?;
+                if stored_pages >= existing.pages {
+                    return Ok(());
+                }
+
+                info!(
+                    gallery_id = existing.id,
+                    stored_pages,
+                    expected_pages = existing.pages,
+                    "检测到不完整画廊，进入修复流程"
+                );
+                return self.republish(&existing, &message).await;
+            }
         }
 
         let gallery_data = self.ehentai.get_gallery(gallery_url_param).await?;
@@ -162,8 +175,10 @@ impl ExloliUploader {
 
         let current_gallery_data = self.ehentai.get_gallery(gallery_url_param).await?;
 
-        // 上傳新發現的圖片 (忽略返回值，更新流程尽量执行)
-        let _ = self.upload_gallery_image(&current_gallery_data).await?;
+        // 补充新页面时要求图片完整，避免生成包含缺页的预览。
+        if !self.upload_gallery_image(&current_gallery_data).await? {
+            bail!("画廊 {} 图片补全失败", current_gallery_data.url.id());
+        }
 
         if current_gallery_data.tags != entity.tags.0 || current_gallery_data.title != entity.title
         {
@@ -199,13 +214,17 @@ impl ExloliUploader {
     pub async fn republish(&self, gallery: &GalleryEntity, msg: &MessageEntity) -> Result<()> {
         info!("重新發布：{}", msg.id);
 
-        let eh_gallery_url = gallery.url();
-        let gallery_data_for_catbox = self.ehentai.get_gallery(&eh_gallery_url).await?;
+        let gallery_data = self.ehentai.get_gallery(&gallery.url()).await?;
 
-        let _ = self.upload_gallery_image(&gallery_data_for_catbox).await?;
+        if !self.upload_gallery_image(&gallery_data).await? {
+            bail!("画廊 {} 图片补全失败", gallery_data.url.id());
+        }
 
-        let article = self.publish_telegraph_article(gallery).await?;
-        let text = self.create_message_text(gallery, &article.url).await?;
+        let refreshed_gallery = GalleryEntity::get(gallery.id)
+            .await?
+            .ok_or_else(|| anyhow!("图片补全后找不到画廊 {}", gallery.id))?;
+        let article = self.publish_telegraph_article(&refreshed_gallery).await?;
+        let text = self.create_message_text(&refreshed_gallery, &article.url).await?;
 
         let edit_res = self
             .bot
@@ -248,6 +267,35 @@ impl ExloliUploader {
                     time::sleep(Duration::from_secs(60)).await;
                 }
             }
+        }
+        Ok(())
+    }
+
+    pub async fn repair_incomplete(&self, mut galleries: Vec<GalleryEntity>) -> Result<()> {
+        if galleries.is_empty() {
+            galleries = GalleryEntity::list_incomplete().await?;
+        }
+
+        for gallery in galleries.iter().rev() {
+            let stored_pages = PageEntity::count(gallery.id).await?;
+            if stored_pages >= gallery.pages {
+                continue;
+            }
+            let Some(message) = MessageEntity::get_by_gallery(gallery.id).await? else {
+                warn!(gallery_id = gallery.id, "不完整画廊没有频道消息，跳过自动修复");
+                continue;
+            };
+
+            info!(
+                gallery_id = gallery.id,
+                stored_pages,
+                expected_pages = gallery.pages,
+                "开始补全不完整画廊"
+            );
+            if let Err(err) = self.republish(gallery, &message).await {
+                error!(gallery_id = gallery.id, error = %err, "不完整画廊补全失败");
+            }
+            time::sleep(Duration::from_secs(5)).await;
         }
         Ok(())
     }
@@ -371,12 +419,9 @@ impl ExloliUploader {
                             // 依然保留 3 次重试，但对于自建图床几乎用不到
                             for attempt in 1..=3 {
                                 match client_clone.get(&url).send().await {
-                                    Ok(res) => {
-                                        if let Ok(bytes) = res.bytes().await {
-                                            // 🗑️ 已经彻底删除了 has_qrcode 二维码检测相关的代码
-
-                                            match img_uploader.upload_file(&filename, &bytes).await
-                                            {
+                                    Ok(res) => match res.error_for_status() {
+                                        Ok(res) => match res.bytes().await {
+                                            Ok(bytes) => match img_uploader.upload_file(&filename, &bytes).await {
                                                 Ok(uploaded_url) => {
                                                     let db_result: Result<()> = async {
                                                         ImageEntity::create(
@@ -424,11 +469,22 @@ impl ExloliUploader {
                                                 }
                                                 Err(err) => error!(
                                                     "图床上传失败 (尝试 {}/3): {}",
-                                                    attempt, err
+                                                    attempt,
+                                                    err
                                                 ),
-                                            }
-                                        }
-                                    }
+                                            },
+                                            Err(err) => error!(
+                                                "E站图片读取失败 (尝试 {}/3): {}",
+                                                attempt,
+                                                err
+                                            ),
+                                        },
+                                        Err(err) => error!(
+                                            "E站图片 HTTP 状态异常 (尝试 {}/3): {}",
+                                            attempt,
+                                            err
+                                        ),
+                                    },
                                     Err(err) => error!("E站下载失败 (尝试 {}/3): {}", attempt, err),
                                 }
                                 // 如果失败了才稍微等一下，避免死循环攻击

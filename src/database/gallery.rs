@@ -118,6 +118,17 @@ impl GalleryEntity {
         .await
     }
 
+    pub async fn list_incomplete() -> Result<Vec<Self>> {
+        sqlx::query_as::<_, Self>(
+            r#"SELECT gallery.* FROM gallery
+            WHERE gallery.deleted = FALSE
+              AND (SELECT COUNT(*) FROM page WHERE page.gallery_id = gallery.id) < gallery.pages
+            ORDER BY gallery.posted DESC"#,
+        )
+        .fetch_all(&*DB)
+        .await
+    }
+
     pub async fn get_random() -> Result<Option<Self>> {
         sqlx::query_as::<_, Self>(
             "SELECT * FROM gallery WHERE deleted = FALSE ORDER BY RANDOM() LIMIT 1",
