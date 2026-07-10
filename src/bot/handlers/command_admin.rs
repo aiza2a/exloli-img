@@ -25,7 +25,45 @@ pub fn admin_command_handler() -> Handler<'static, DependencyMap, Result<()>, Dp
         .branch(case![AdminCommand::Update(url)].endpoint(cmd_update))
         .branch(case![AdminCommand::Delete].endpoint(cmd_delete))
         .branch(case![AdminCommand::Erase].endpoint(cmd_delete))
+        .branch(case![AdminCommand::Repair].endpoint(cmd_repair))
         .branch(case![AdminCommand::ReCheck].endpoint(cmd_recheck))
+}
+
+async fn cmd_repair(bot: Bot, msg: Message, uploader: ExloliUploader) -> Result<()> {
+    let Some(user) = msg.from() else {
+        return Ok(());
+    };
+    info!("{}: /repair", user.id);
+
+    let target = match msg.reply_to_message().and_then(|reply| reply.forward_from_message_id()) {
+        Some(channel_msg) => match MessageEntity::get(channel_msg).await? {
+            Some(message) => match GalleryEntity::get(message.gallery_id).await? {
+                Some(gallery) => vec![gallery],
+                None => {
+                    reply_to!(bot, msg, "<b>⚠️ 数据缺失</b>\n找不到对应画廊记录。").await?;
+                    return Ok(());
+                }
+            },
+            None => {
+                reply_to!(bot, msg, "<b>⚠️ 数据缺失</b>\n找不到对应频道消息记录。").await?;
+                return Ok(());
+            }
+        },
+        None => Vec::new(),
+    };
+
+    let reply = if target.is_empty() {
+        reply_to!(bot, msg, "正在补全所有不完整画廊...").await?
+    } else {
+        reply_to!(bot, msg, "正在补全当前画廊...").await?
+    };
+    match uploader.repair_incomplete(target).await {
+        Ok(()) => bot.edit_message_text(msg.chat.id, reply.id, "✅ 补全任务已完成").await?,
+        Err(err) => bot
+            .edit_message_text(msg.chat.id, reply.id, format!("❌ 补全任务失败：{}", err))
+            .await?,
+    };
+    Ok(())
 }
 
 async fn cmd_recheck(bot: Bot, msg: Message, uploader: ExloliUploader) -> Result<()> {

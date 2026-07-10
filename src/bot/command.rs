@@ -11,6 +11,8 @@ pub enum AdminCommand {
     Delete,
     #[command(description = "完全刪除所回覆的畫廊 (硬刪除/修復缺頁)")]
     Erase,
+    #[command(description = "补全缺页并重建预览 (管理員)")]
+    Repair,
     #[command(description = "檢測並修復預覽鏈接")]
     ReCheck,
 }
