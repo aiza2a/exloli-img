@@ -34,7 +34,6 @@ pub fn public_command_handler(
     teloxide::filter_command::<PublicCommand, _>()
         .branch(case![PublicCommand::Query(args)].endpoint(cmd_query))
         .branch(case![PublicCommand::Ping].endpoint(cmd_ping))
-        .branch(case![PublicCommand::Update(url)].endpoint(cmd_update))
         .branch(case![PublicCommand::Best(args)].endpoint(cmd_best))
         .branch(case![PublicCommand::Challenge].endpoint(cmd_challenge))
         .branch(case![PublicCommand::Upload(args)].endpoint(cmd_upload))
@@ -81,7 +80,7 @@ async fn cmd_upload(
         }
     };
 
-    info!("{}: /upload {}", msg.from().unwrap().id, gallery);
+    info!("/upload {}", gallery);
 
     if GalleryEntity::get(gallery.id()).await?.is_none() {
         reply_to!(bot, msg, "⚠️ <b>權限不足</b>\n非管理員只能上傳機器人數據庫中已存在的畫廊。")
@@ -100,7 +99,7 @@ async fn cmd_challenge(
     scheduler: Scheduler,
     challange_provider: ChallengeProvider,
 ) -> Result<()> {
-    info!("{}: /challenge", msg.from().unwrap().id);
+    info!("/challenge");
     let mut challenge = challange_provider.get_challenge().await.unwrap();
     let answer = challenge[0].clone();
     challenge.shuffle(&mut thread_rng());
@@ -159,7 +158,7 @@ async fn cmd_best(
         }
     };
 
-    info!("{}: /best {} {}", msg.from().unwrap().id, day1, day2);
+    info!("/best {} {}", day1, day2);
 
     let text = cmd_best_text(day1, day2, 0, cfg.telegram.channel_id).await?;
     let keyboard = cmd_best_keyboard(day1, day2, 0);
@@ -173,7 +172,7 @@ async fn cmd_best(
     Ok(())
 }
 
-async fn cmd_update(
+pub(crate) async fn cmd_update(
     bot: Bot,
     msg: Message,
     uploader: ExloliUploader,
@@ -204,7 +203,7 @@ async fn cmd_update(
         }
     };
 
-    info!("{}: /update (msg_id/url: {})", msg.from().unwrap().id, msg_id);
+    info!("/update (msg_id/url: {})", msg_id);
 
     let msg_entity =
         MessageEntity::get(msg_id).await?.ok_or_else(|| anyhow!("找不到對應的消息記錄"))?;
@@ -228,7 +227,7 @@ async fn cmd_update(
 }
 
 async fn cmd_ping(bot: Bot, msg: Message, scheduler: Scheduler) -> Result<()> {
-    info!("{}: /ping", msg.from().unwrap().id);
+    info!("/ping");
     let reply = reply_to!(bot, msg, "🏓 <b>Pong~</b>").await?;
     if !msg.chat.is_private() {
         scheduler.delete_msg(msg.chat.id, msg.id, 120);
@@ -251,7 +250,7 @@ async fn cmd_query(bot: Bot, msg: Message, cfg: Config, url_text: String) -> Res
         }
     };
 
-    info!("{}: /query {}", msg.from().unwrap().id, gallery);
+    info!("/query {}", gallery);
 
     match GalleryEntity::get(gallery.id()).await? {
         Some(gallery) => {
@@ -286,7 +285,7 @@ async fn cmd_random(
     trans: EhTagTransDB,
     args: String,
 ) -> Result<()> {
-    info!("{}: /random {}", msg.from().unwrap().id, args);
+    info!("/random {}", args);
 
     let mut parts: Vec<&str> = args.split_whitespace().collect();
     let mut count = 1;
@@ -403,7 +402,7 @@ async fn cmd_random(
     Ok(())
 }
 async fn cmd_stats(bot: Bot, msg: Message) -> Result<()> {
-    info!("{}: /stats", msg.from().unwrap().id);
+    info!("/stats");
 
     let gallery_count = GalleryEntity::count().await?;
     let image_count = ImageEntity::count().await?;
@@ -422,8 +421,11 @@ async fn cmd_stats(bot: Bot, msg: Message) -> Result<()> {
 }
 
 async fn cmd_fav(bot: Bot, msg: Message, cfg: Config) -> Result<()> {
-    info!("{}: /fav", msg.from().unwrap().id);
-    let user_id = msg.from().unwrap().id.0 as i64;
+    info!("/fav");
+    let Some(user) = msg.from() else {
+        return Ok(());
+    };
+    let user_id = user.id.0 as i64;
 
     let text = fav_text(user_id, 0, cfg.telegram.channel_id.clone()).await?;
     let count = crate::database::FavoriteEntity::count(user_id).await?;

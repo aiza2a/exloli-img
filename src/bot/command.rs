@@ -5,6 +5,8 @@ use teloxide::utils::command::BotCommands;
 pub enum AdminCommand {
     #[command(description = "根據 E 站 URL 強制上傳畫廊 (管理員)")]
     Upload(String),
+    #[command(description = "依據 URL 或回覆消息更新畫廊元數據 (管理員)")]
+    Update(String),
     #[command(description = "刪除所回覆的畫廊 (軟刪除)")]
     Delete,
     #[command(description = "完全刪除所回覆的畫廊 (硬刪除/修復缺頁)")]
@@ -18,8 +20,6 @@ pub enum AdminCommand {
 pub enum PublicCommand {
     #[command(description = "根據 E 站 URL 上傳已收錄的畫廊")]
     Upload(String),
-    #[command(description = "根據消息 URL 更新指定畫廊")]
-    Update(String),
     #[command(description = "根據 E 站 URL 查詢畫廊信息")]
     Query(String),
     #[command(description = "查詢排行榜 (用法: /best 30 0)")]

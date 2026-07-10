@@ -7,7 +7,7 @@ use teloxide::types::MessageId;
 use tracing::info;
 
 use crate::bot::command::AdminCommand;
-use crate::bot::filter::filter_admin_msg;
+use crate::bot::handlers::cmd_update;
 use crate::bot::Bot;
 use crate::database::{GalleryEntity, MessageEntity};
 use crate::ehentai::EhGalleryUrl;
@@ -21,13 +21,17 @@ pub fn admin_command_handler() -> Handler<'static, DependencyMap, Result<()>, Dp
     teloxide::filter_command::<AdminCommand, _>()
         .chain(filter_admin_msg())
         .branch(case![AdminCommand::Upload(url)].endpoint(cmd_upload))
+        .branch(case![AdminCommand::Update(url)].endpoint(cmd_update))
         .branch(case![AdminCommand::Delete].endpoint(cmd_delete))
         .branch(case![AdminCommand::Erase].endpoint(cmd_delete))
         .branch(case![AdminCommand::ReCheck].endpoint(cmd_recheck))
 }
 
 async fn cmd_recheck(bot: Bot, msg: Message, uploader: ExloliUploader) -> Result<()> {
-    info!("{}: /recheck", msg.from().unwrap().id);
+    let Some(user) = msg.from() else {
+        return Ok(());
+    };
+    info!("{}: /recheck", user.id);
 
     // 1. 獲取回覆的消息
     let reply_to = match msg.reply_to_message() {
@@ -125,14 +129,20 @@ async fn cmd_upload(
         }
     };
 
-    info!("{}: /upload {}", msg.from().unwrap().id, gallery);
+    let Some(user) = msg.from() else {
+        return Ok(());
+    };
+    info!("{}: /upload {}", user.id, gallery);
     try_with_reply!(bot, msg, uploader.try_upload(&gallery, false).await);
     Ok(())
 }
 
 async fn cmd_delete(bot: Bot, msg: Message, command: AdminCommand) -> Result<()> {
     let cmd_name = if matches!(command, AdminCommand::Delete) { "/delete" } else { "/erase" };
-    info!("{}: {}", msg.from().unwrap().id, cmd_name);
+    let Some(user) = msg.from() else {
+        return Ok(());
+    };
+    info!("{}: {}", user.id, cmd_name);
 
     // 🔥 修正：不再直接用 ? 報錯，而是給用戶發送消息引導，避免終端日誌 ERROR
     let reply_to = match msg.reply_to_message() {

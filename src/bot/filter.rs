@@ -11,12 +11,38 @@ where
     Output: Send + Sync + 'static,
 {
     dptree::filter_async(|message: Message, bot: Bot, cfg: Config| async move {
-        bot.get_chat_member(cfg.telegram.group_id, message.from().unwrap().id)
+        let Some(user) = message.from() else {
+            return false;
+        };
+        bot.get_chat_member(cfg.telegram.group_id, user.id)
             .await
             .map(|member| {
                 matches!(member.kind, ChatMemberKind::Administrator(_) | ChatMemberKind::Owner(_))
             })
             .unwrap_or_default()
+    })
+}
+
+pub fn filter_public_command_rate<Output>() -> Handler<'static, DependencyMap, Output, DpHandlerDescription>
+where
+    Output: Send + Sync + 'static,
+{
+    dptree::filter_async(|message: Message, bot: Bot, limiter: super::utils::RateLimiter| async move {
+        let Some(user) = message.from() else {
+            return false;
+        };
+        let Some(wait) = limiter.insert(user.id) else {
+            return true;
+        };
+
+        let _ = bot
+            .send_message(
+                message.chat.id,
+                format!("操作频率过高，请等待 {} 秒后再试", wait.as_secs().max(1)),
+            )
+            .reply_to_message_id(message.id)
+            .await;
+        false
     })
 }
 

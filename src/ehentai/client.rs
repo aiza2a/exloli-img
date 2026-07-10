@@ -86,10 +86,14 @@ impl EhClient {
         let mut ret = vec![];
         // 第一个是 header
         for gl in gl_list.skip(1) {
-            let title = gl.select_text("td.gl3c.glname a div.glink").unwrap();
-            let url = gl.select_attr("td.gl3c.glname a", "href").unwrap();
-            debug!(url, title);
-            ret.push(url.parse()?)
+            let title = gl.select_text("td.gl3c.glname a div.glink").ok_or_else(|| {
+                EhError::UnexpectedPage("search result missing gallery title".to_string())
+            })?;
+            let gallery_url = gl.select_attr("td.gl3c.glname a", "href").ok_or_else(|| {
+                EhError::UnexpectedPage("search result missing gallery URL".to_string())
+            })?;
+            debug!(url = gallery_url, title);
+            ret.push(gallery_url.parse()?)
         }
 
         let next = html
@@ -142,9 +146,14 @@ impl EhClient {
 
         let resp = send!(self.0.get(url.url()))?;
         let html = Html::parse_document(&resp.text().await?);
-        let onclick = html.select_attr("p.g2 a", "onclick").unwrap();
-
-        let or = RE.captures(&onclick).and_then(|c| c.name("or")).unwrap().as_str();
+        let onclick = html
+            .select_attr("p.g2 a", "onclick")
+            .ok_or_else(|| EhError::UnexpectedPage("archiver link missing".to_string()))?;
+        let or = RE
+            .captures(&onclick)
+            .and_then(|c| c.name("or"))
+            .map(|value| value.as_str())
+            .ok_or_else(|| EhError::UnexpectedPage("archiver token missing".to_string()))?;
 
         send!(self
             .0
@@ -164,7 +173,9 @@ impl EhClient {
             let html = Html::parse_document(&resp.text().await?);
 
             // 英文标题、日文标题、父画廊
-            let title = html.select_text("h1#gn").expect("xpath fail: h1#gn");
+            let title = html
+                .select_text("h1#gn")
+                .ok_or_else(|| EhError::UnexpectedPage("gallery title missing".to_string()))?;
             let title_jp = html.select_text("h1#gj");
             let parent = html.select_attr("td.gdt2 a", "href").and_then(|s| s.parse().ok());
 
@@ -174,20 +185,30 @@ impl EhClient {
             for ele in html.select(&selector) {
                 let namespace = ele
                     .select_text("td.tc")
-                    .expect("xpath fail: td.tc")
+                    .ok_or_else(|| EhError::UnexpectedPage("tag namespace missing".to_string()))?
                     .trim_matches(':')
                     .to_string();
                 let tag = ele.select_texts("td div a");
                 tags.insert(namespace, tag);
             }
 
-            // 收藏数量
-            let favorite = html.select_text("#favcount").expect("xpath fail: #favcount");
-            let favorite = favorite.split(' ').next().unwrap().parse().unwrap();
+            let favorite_text = html
+                .select_text("#favcount")
+                .ok_or_else(|| EhError::UnexpectedPage("favorite count missing".to_string()))?;
+            let favorite = favorite_text
+                .split(' ')
+                .next()
+                .ok_or_else(|| EhError::UnexpectedPage("favorite count empty".to_string()))?
+                .parse()
+                .map_err(|_| EhError::UnexpectedPage("invalid favorite count".to_string()))?;
 
             // 发布时间
-            let posted = &html.select_texts("td.gdt2")[0];
-            let posted = NaiveDateTime::parse_from_str(posted, "%Y-%m-%d %H:%M")?;
+            let posted_text = html
+                .select_texts("td.gdt2")
+                .into_iter()
+                .next()
+                .ok_or_else(|| EhError::UnexpectedPage("posted time missing".to_string()))?;
+            let posted = NaiveDateTime::parse_from_str(&posted_text, "%Y-%m-%d %H:%M")?;
 
             // 每一页的 URL
             let pages = html.select_attrs("div#gdt a", "href");
@@ -232,18 +253,26 @@ impl EhClient {
         let resp = send!(self.0.get(&page.url()))?;
         let (url, nl, fileindex) = {
             let html = Html::parse_document(&resp.text().await?);
-            let url = html.select_attr("img#img", "src").unwrap();
+            let url = html
+                .select_attr("img#img", "src")
+                .ok_or_else(|| EhError::UnexpectedPage("image URL missing".to_string()))?;
             let nl = html.select_attr("img#img", "onerror").and_then(extract_nl);
-            let fileindex = extract_fileindex(&url).unwrap();
+            let fileindex = extract_fileindex(&url)
+                .ok_or_else(|| EhError::UnexpectedPage("image file index missing".to_string()))?;
             (url, nl, fileindex)
         };
 
         return if send!(self.0.head(&url)).is_ok() {
             Ok((fileindex, url))
         } else if nl.is_some() {
-            let resp = send!(self.0.get(&page.with_nl(&nl.unwrap()).url()))?;
+            let retry_page = page.with_nl(
+                nl.as_deref().ok_or_else(|| EhError::UnexpectedPage("retry token missing".to_string()))?,
+            );
+            let resp = send!(self.0.get(retry_page.url()))?;
             let html = Html::parse_document(&resp.text().await?);
-            let url = html.select_attr("img#img", "src").unwrap();
+            let url = html
+                .select_attr("img#img", "src")
+                .ok_or_else(|| EhError::UnexpectedPage("retry image URL missing".to_string()))?;
             Ok((fileindex, url))
         } else {
             Err(EhError::HaHUrlBroken(url))
