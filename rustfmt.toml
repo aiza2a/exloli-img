@@ -1,3 +1,2 @@
-group_imports = "StdExternalCrate"
+# Keep this file compatible with the stable Rust toolchain used by CI.
 use_small_heuristics = "Max"
-imports_granularity = "Module"

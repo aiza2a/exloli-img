@@ -284,10 +284,8 @@ impl ExloliUploader {
     async fn upload_gallery_image(&self, gallery: &EhGallery) -> Result<bool> {
         let mut pages = vec![];
         for page in &gallery.pages {
-            // 🌟 1. 攔截已知廣告圖：直接當作空氣跳過
-            if crate::database::BadImageEntity::is_bad(page.hash()).await.unwrap_or(None) == Some(2)
-            {
-                info!("跳過已知廣告圖：{}", page.hash());
+            if crate::database::BadImageEntity::is_bad(page.hash()).await? == Some(2) {
+                info!(page = page.page(), hash = page.hash(), "跳过已标记的广告图片");
                 continue;
             }
             match ImageEntity::get_by_hash(page.hash()).await? {
@@ -305,7 +303,7 @@ impl ExloliUploader {
         }
 
         // MPSC 併發通道
-        let concurrent = self.config.threads_num;
+        let concurrent = self.config.threads_num.max(1);
         let (tx, mut rx) = tokio::sync::mpsc::channel(concurrent * 2);
         let client = self.ehentai.clone();
 
@@ -334,7 +332,6 @@ impl ExloliUploader {
         let http_client = reqwest::Client::builder().timeout(Duration::from_secs(60)).build()?;
 
         let concurrent_limit = self.config.threads_num.max(3);
-        let total_pages = gallery.pages.len() as i32;
 
         // 实例化新的 Kvault Uploader
         let uploader_client = KvaultUploader::new(&base_url, &api_token);
@@ -348,18 +345,22 @@ impl ExloliUploader {
                 while let Some((page, (fileindex, url))) = rx.recv().await {
                     // 🚀 删除了原有的 tokio::time::sleep(Duration::from_secs(1)).await; 彻底解除限速
 
-                    let mut suffix = url.split('.').last().unwrap_or("jpg");
+                    let mut suffix = url.split('.').next_back().unwrap_or("jpg");
                     if suffix == "webp" {
                         suffix = "jpg";
                     }
                     if suffix == "gif" {
-                        processed_count += 1;
+                        info!(page = page.page(), "跳过 GIF 图片");
                         continue;
                     }
 
                     let filename = format!("{}.{}", page.hash(), suffix);
 
-                    let permit = semaphore.clone().acquire_owned().await.unwrap();
+                    let permit = semaphore
+                        .clone()
+                        .acquire_owned()
+                        .await
+                        .map_err(|_| anyhow!("图片上传队列已关闭"))?;
                     let client_clone = http_client.clone();
                     let img_uploader = uploader_client.clone();
 
@@ -377,25 +378,49 @@ impl ExloliUploader {
                                             match img_uploader.upload_file(&filename, &bytes).await
                                             {
                                                 Ok(uploaded_url) => {
-                                                    info!(
-                                                        "图床上传成功: {} -> {}",
-                                                        page.page(),
-                                                        uploaded_url
-                                                    );
-                                                    let _ = ImageEntity::create(
-                                                        fileindex,
-                                                        page.hash(),
-                                                        &uploaded_url,
-                                                    )
+                                                    let db_result: Result<()> = async {
+                                                        ImageEntity::create(
+                                                            fileindex,
+                                                            page.hash(),
+                                                            &uploaded_url,
+                                                        )
+                                                        .await?;
+                                                        let image = ImageEntity::get_by_hash(page.hash())
+                                                            .await?
+                                                            .ok_or_else(|| {
+                                                                anyhow!(
+                                                                    "图片 {} 上传后未找到数据库记录",
+                                                                    page.page()
+                                                                )
+                                                            })?;
+                                                        PageEntity::create(
+                                                            page.gallery_id(),
+                                                            page.page(),
+                                                            image.id,
+                                                        )
+                                                        .await?;
+                                                        info!(
+                                                            page = page.page(),
+                                                            image_id = image.id,
+                                                            url = %uploaded_url,
+                                                            "图片上传并写入数据库成功"
+                                                        );
+                                                        Ok(())
+                                                    }
                                                     .await;
-                                                    let _ = PageEntity::create(
-                                                        page.gallery_id(),
-                                                        page.page(),
-                                                        fileindex,
-                                                    )
-                                                    .await;
-                                                    success = true;
-                                                    break; // 成功则跳出重试循环
+
+                                                    match db_result {
+                                                        Ok(()) => {
+                                                            success = true;
+                                                            break;
+                                                        }
+                                                        Err(err) => error!(
+                                                            "图片 {} 数据库写入失败 (尝试 {}/3): {}",
+                                                            page.page(),
+                                                            attempt,
+                                                            err
+                                                        ),
+                                                    }
                                                 }
                                                 Err(err) => error!(
                                                     "图床上传失败 (尝试 {}/3): {}",

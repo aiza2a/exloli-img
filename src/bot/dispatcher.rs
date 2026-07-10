@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use teloxide::prelude::*;
 
-use super::filter::{filter_callbackdata, filter_channel_msg};
+use super::filter::{filter_callbackdata, filter_channel_msg, filter_public_command_rate};
 use super::handlers::*;
 use super::utils::{ChallengeLocker, ChallengeProvider, RateLimiter};
 use super::Bot;
@@ -21,7 +21,7 @@ pub async fn start_dispatcher(
         .branch(
             Update::filter_message()
                 .branch(admin_command_handler())
-                .branch(public_command_handler(config.clone()))
+                .branch(filter_public_command_rate().chain(public_command_handler(config.clone())))
                 .branch(filter_channel_msg().endpoint(custom_pool_sender)),
         )
         .branch(

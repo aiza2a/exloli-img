@@ -2,13 +2,13 @@ name: CI and image publish
 
 on:
   push:
-    branches: [master, maintenance/docs-ci-container]
+    branches: [master, maintenance/docs-ci-container, maintenance/stability-admin-update]
     tags: ['v*']
   pull_request:
     branches: [master]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   quality:
@@ -19,23 +19,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - name: Remove trailing whitespace
-        run: find src -type f -name '*.rs' -print0 | xargs -0 sed -i 's/[[:space:]]*$//'
-      - name: Format source
+      - name: Format
         run: cargo fmt --all
-      - name: Commit formatting changes
-        run: |
-          if git diff --quiet; then
-            echo "Rust source is already formatted."
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -- Cargo.toml src
-          git commit -m "style: format Rust source"
-          git push
-      - name: Verify format
-        run: cargo fmt --check
       - name: Clippy
         run: cargo clippy --all-targets
       - name: Unit tests
